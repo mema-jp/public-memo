@@ -1,1 +1,69 @@
+---
+description: 'Update Cloud9 environment policy example'
+schemaVersion: '0.3'
+assumeRole: '{{ AutomationAssumeRole }}'
+parameters:
+  Cloud9EnvironmentId:
+    type: 'String'
+    description: '(Required) The ID of the Cloud9 environment to update.'
+  PolicyArn:
+    type: 'String'
+    description: '(Required) The ARN of the policy to attach to the Cloud9 role.'
+mainSteps:
+- name: AttachPolicyToCloud9Role
+  action: 'aws:executeAwsApi'
+  inputs:
+    Service: 'iam'
+    Api: 'AttachRolePolicy'
+    RoleName: '{{ Cloud9EnvironmentRoleName }}'
+    PolicyArn: '{{ PolicyArn }}'
+- name: VerifyPolicyAttachment
+  action: 'aws:executeAwsApi'
+  inputs:
+    Service: 'iam'
+    Api: 'ListAttachedRolePolicies'
+    RoleName: '{{ Cloud9EnvironmentRoleName }}'
 
+
+
+
+
+description: "Assign predefined permissions to Cloud9 environments."
+schemaVersion: "0.3"
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  EnvironmentIdList:
+    type: "StringList"
+  PolicyArn:
+    type: "String"
+mainSteps:
+- name: assignPermissions
+  action: "aws:executeScript"
+  inputs:
+    Runtime: "python3.6"
+    Handler: "index.handler"
+    Script: |
+      import boto3
+
+      def handler(event, context):
+        # Initialize the IAM client
+        iam_client = boto3.client('iam')
+        # The predefined policy ARN to attach
+        policy_arn = event['PolicyArn']
+        # List of Cloud9 environment IDs
+        environment_id_list = event['EnvironmentIdList']
+        
+        # Iterate over the environment IDs
+        for environment_id in environment_id_list:
+          # Here you should replace 'role_name' with logic to determine the role name from the environment ID
+          role_name = "RoleNameFor-" + environment_id  # This is an example role name pattern
+          
+          # Attach the policy to the role
+          iam_client.attach_role_policy(
+            RoleName=role_name,
+            PolicyArn=policy_arn
+          )
+          print(f"Policy {policy_arn} attached to role {role_name} for environment ID {environment_id}")
+    InputPayload:
+      EnvironmentIdList: "{{ EnvironmentIdList }}"
+      PolicyArn: "{{ PolicyArn }}"
