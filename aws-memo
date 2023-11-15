@@ -106,3 +106,66 @@ Resources:
     Properties:
       # Lambda 函数的配置
       # 这个 Lambda 函数将处理添加用户到 Cloud9 环境的逻辑
+
+
+
+  AddUserLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.8
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              try:
+                  cloud9_client = boto3.client('cloud9')
+                  if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                      cloud9_client.create_environment_membership(
+                          environmentId=event['ResourceProperties']['EnvironmentId'],
+                          userArn=event['ResourceProperties']['UserArn'],
+                          permissions='read-write'
+                      )
+                  response_data = {}
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+              except Exception as e:
+                  response_data = {'Error': str(e)}
+                  cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+
+      Timeout: 300
+
+
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "cloud9:*"
+                  - "logs:*"
+                  - "cfnresponse:*"
+                Resource: "*"
+
+
+  AddUserToCloud9:
+    Type: "Custom::AddUserToCloud9"
+    Properties:
+      ServiceToken: !GetAtt AddUserLambda.Arn
+      EnvironmentId: !Ref MyCloud9Environment
+      UserArn: "arn:aws:iam::123456789012:user/ExampleUser"
