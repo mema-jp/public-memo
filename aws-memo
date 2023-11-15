@@ -67,3 +67,21 @@ mainSteps:
     InputPayload:
       EnvironmentIdList: "{{ EnvironmentIdList }}"
       PolicyArn: "{{ PolicyArn }}"
+
+
+
+{
+  "schemaVersion": "0.3",
+  "description": "Cloud9 Environment Membership Creation",
+  "mainSteps": [
+    {
+      "action": "aws:executeScript",
+      "name": "CreateMembership",
+      "inputs": {
+        "Runtime": "python3.6",
+        "Handler": "script_handler",
+        "Script": "import boto3\n\ndef script_handler(events, context):\n    client = boto3.client('cloud9')\n    response = client.create_environment_membership(\n        environmentId='环境ID',\n        userArn='用户ARN',\n        permissions='read-write'\n    )\n    return response"
+      }
+    }
+  ]
+}
