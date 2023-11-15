@@ -85,3 +85,24 @@ mainSteps:
     }
   ]
 }
+
+
+
+Resources:
+  MyCloud9Environment:
+    Type: AWS::Cloud9::EnvironmentEC2
+    Properties:
+      # Cloud9 环境的配置
+
+  AddUserToCloud9:
+    Type: "Custom::AddUserToCloud9"
+    Properties:
+      ServiceToken: !GetAtt AddUserLambda.Arn
+      EnvironmentId: !Ref MyCloud9Environment
+      UserArn: "需要添加的用户ARN"
+
+  AddUserLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      # Lambda 函数的配置
+      # 这个 Lambda 函数将处理添加用户到 Cloud9 环境的逻辑
