@@ -169,3 +169,23 @@ Resources:
       ServiceToken: !GetAtt AddUserLambda.Arn
       EnvironmentId: !Ref MyCloud9Environment
       UserArn: "arn:aws:iam::123456789012:user/ExampleUser"
+
+
+
+Parameters:
+  UserArn:
+    Type: String
+    Description: "ARN of the user to add to the Cloud9 environment"
+
+
+Resources:
+  # ...（其他资源）...
+
+  AddUserToCloud9:
+    Type: "Custom::AddUserToCloud9"
+    Properties:
+      ServiceToken: !GetAtt AddUserLambda.Arn
+      EnvironmentId: !Ref MyCloud9Environment
+      UserArn: !Ref UserArn
+
+  # ...（Lambda 函数和其他资源）...
