@@ -385,3 +385,75 @@ mainSteps:
     isEnd: True
     precondition:
       StringEquals: ["{{ checkIamInstanceProfile.InstanceProfileExists }}", "false"]
+
+
+description: "自动检查 EC2 实例的 IAM 实例配置文件并进行更新"
+schemaVersion: "0.3"
+
+parameters:
+  InstanceId:
+    type: "String"
+    description: "(Required) ID of the EC2 instance."
+  NewIamInstanceProfile:
+    type: "String"
+    description: "(Required) The new IAM instance profile to associate."
+
+mainSteps:
+  - name: describeInstance
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "describeInstances"
+      InstanceIds:
+        - "{{ InstanceId }}"
+    outputs:
+      - Selector: "$.Reservations[0].Instances[0].IamInstanceProfile"
+        Name: "CurrentInstanceProfile"
+
+  - name: checkIamInstanceProfile
+    action: "aws:executeScript"
+    inputs:
+      Runtime: "python3.6"
+      Handler: "script_handler"
+      Script: |
+        def script_handler(inputs, context):
+            iam_instance_profile = inputs['CurrentInstanceProfile']
+            if iam_instance_profile is None or 'AssociationId' not in iam_instance_profile:
+                return {"InstanceProfileExists": False}
+            else:
+                return {"InstanceProfileExists": True, "AssociationId": iam_instance_profile['AssociationId']}
+      InputPayload:
+        CurrentInstanceProfile: "{{ describeInstance.CurrentInstanceProfile }}"
+    outputs:
+      - Selector: "$.Payload.InstanceProfileExists"
+        Name: "InstanceProfileExists"
+      - Selector: "$.Payload.AssociationId"
+        Name: "AssociationId"
+
+  - name: conditionalBranch
+    action: "aws:branch"
+    inputs:
+      Choices:
+        - Variable: "{{ checkIamInstanceProfile.InstanceProfileExists }}"
+          BooleanEquals: true
+          NextStep: disassociateIamInstanceProfile
+        - Variable: "{{ checkIamInstanceProfile.InstanceProfileExists }}"
+          BooleanEquals: false
+          NextStep: associateIamInstanceProfile
+
+  - name: disassociateIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "disassociateIamInstanceProfile"
+      AssociationId: "{{ checkIamInstanceProfile.AssociationId }}"
+    nextStep: associateIamInstanceProfile
+
+  - name: associateIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "associateIamInstanceProfile"
+      InstanceId: "{{ InstanceId }}"
+      IamInstanceProfile:
+        Name: "{{ NewIamInstanceProfile }}"
