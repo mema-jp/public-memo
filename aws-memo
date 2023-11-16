@@ -266,3 +266,60 @@ mainSteps:
       InstanceId: "{{ InstanceId }}"
       IamInstanceProfile:
         Name: "{{ NewIamInstanceProfile }}"
+
+
+description: "自动更换或添加 EC2 实例的 IAM 实例配置文件"
+schemaVersion: "0.3"
+
+parameters:
+  InstanceId:
+    type: "String"
+    description: "(Required) ID of the EC2 instance."
+  IamInstanceProfile:
+    type: "String"
+    description: "(Required) The IAM instance profile to associate."
+
+mainSteps:
+  - name: describeInstance
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "describeInstances"
+      Filters:
+        - Name: "instance-id"
+          Values: 
+            - "{{ InstanceId }}"
+    outputs:
+      - Selector: "$.Reservations[0].Instances[0].IamInstanceProfile"
+        Name: "CurrentInstanceProfile"
+
+  - name: checkIamInstanceProfile
+    action: "aws:branch"
+    inputs:
+      Choices:
+        - NextStep: disassociateIamInstanceProfile
+          Variable: "{{ describeInstance.CurrentInstanceProfile }}"
+          Operation: "present"
+        - NextStep: associateIamInstanceProfile
+          Variable: "{{ describeInstance.CurrentInstanceProfile }}"
+          Operation: "notpresent"
+
+  - name: disassociateIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "disassociateIamInstanceProfile"
+      Filters:
+        - Name: "instance-id"
+          Values: 
+            - "{{ InstanceId }}"
+    nextStep: associateIamInstanceProfile
+
+  - name: associateIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "associateIamInstanceProfile"
+      InstanceId: "{{ InstanceId }}"
+      IamInstanceProfile:
+        Name: "{{ IamInstanceProfile }}"
