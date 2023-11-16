@@ -323,3 +323,65 @@ mainSteps:
       InstanceId: "{{ InstanceId }}"
       IamInstanceProfile:
         Name: "{{ IamInstanceProfile }}"
+
+
+description: "自动检查 EC2 实例的 IAM 实例配置文件并进行更新"
+schemaVersion: "0.3"
+
+parameters:
+  InstanceId:
+    type: "String"
+    description: "(Required) ID of the EC2 instance."
+  NewIamInstanceProfile:
+    type: "String"
+    description: "(Required) The new IAM instance profile to associate."
+
+mainSteps:
+  - name: describeInstance
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "describeInstances"
+      InstanceIds:
+        - "{{ InstanceId }}"
+
+  - name: checkIamInstanceProfile
+    action: "aws:executeScript"
+    inputs:
+      Runtime: "python3.6"
+      Handler: "script_handler"
+      Script: |
+        def script_handler(inputs, context):
+            iam_instance_profile = inputs['describeInstance'].get('Reservations', [{}])[0].get('Instances', [{}])[0].get('IamInstanceProfile', None)
+            if iam_instance_profile is None:
+                return {"InstanceProfileExists": False}
+            else:
+                return {"InstanceProfileExists": True}
+      InputPayload:
+        describeInstance: "{{ describeInstance }}"
+    outputs:
+      - Selector: "$.Payload.InstanceProfileExists"
+        Name: "InstanceProfileExists"
+
+  - name: disassociateIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "disassociateIamInstanceProfile"
+      AssociationId: "{{ describeInstance.Reservations[0].Instances[0].IamInstanceProfile.AssociationId }}"
+    nextStep: associateIamInstanceProfile
+    isEnd: True
+    precondition:
+      StringEquals: ["{{ checkIamInstanceProfile.InstanceProfileExists }}", "true"]
+
+  - name: associateIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "associateIamInstanceProfile"
+      InstanceId: "{{ InstanceId }}"
+      IamInstanceProfile:
+        Name: "{{ NewIamInstanceProfile }}"
+    isEnd: True
+    precondition:
+      StringEquals: ["{{ checkIamInstanceProfile.InstanceProfileExists }}", "false"]
