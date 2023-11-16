@@ -189,3 +189,37 @@ Resources:
       UserArn: !Ref UserArn
 
   # ...（Lambda 函数和其他资源）...
+
+
+
+Description: 'Update IAM role for Cloud9 EC2 instance'
+SchemaVersion: '0.3'
+
+Parameters:
+  InstanceId:
+    Type: String
+    Description: '(Required) EC2 Instance ID of the Cloud9 environment'
+  IamRole:
+    Type: String
+    Description: '(Required) The name of the IAM role to attach'
+
+MainSteps:
+  - name: changeIamRole
+    action: 'aws:changeInstanceState'
+    inputs:
+      InstanceIds: ['{{ InstanceId }}']
+      DesiredState: 'stopped'
+  - name: associateIamInstanceProfile
+    action: 'aws:executeAwsApi'
+    inputs:
+      Service: 'ec2'
+      Api: 'associateIamInstanceProfile'
+      Parameters:
+        IamInstanceProfile:
+          Name: '{{ IamRole }}'
+        InstanceId: '{{ InstanceId }}'
+  - name: startInstance
+    action: 'aws:changeInstanceState'
+    inputs:
+      InstanceIds: ['{{ InstanceId }}']
+      DesiredState: 'running'
