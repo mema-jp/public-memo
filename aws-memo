@@ -223,3 +223,46 @@ MainSteps:
     inputs:
       InstanceIds: ['{{ InstanceId }}']
       DesiredState: 'running'
+
+
+
+description: "自动更换 EC2 实例的 IAM 实例配置文件"
+schemaVersion: "0.3"
+
+parameters:
+  InstanceId:
+    type: "String"
+    description: "(Required) ID of the EC2 instance."
+  NewIamInstanceProfile:
+    type: "String"
+    description: "(Required) The new IAM instance profile to associate."
+
+mainSteps:
+  - name: disassociateIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "describeIamInstanceProfileAssociations"
+      Filters:
+        - Name: "instance-id"
+          Values: 
+            - "{{ InstanceId }}"
+    outputs:
+      - Selector: "IamInstanceProfileAssociations[0].AssociationId"
+        Name: "AssociationId"
+
+  - name: disassociateOldIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "disassociateIamInstanceProfile"
+      AssociationId: "{{ disassociateIamInstanceProfile.AssociationId }}"
+
+  - name: associateNewIamInstanceProfile
+    action: "aws:executeAwsApi"
+    inputs:
+      Service: "ec2"
+      Api: "associateIamInstanceProfile"
+      InstanceId: "{{ InstanceId }}"
+      IamInstanceProfile:
+        Name: "{{ NewIamInstanceProfile }}"
