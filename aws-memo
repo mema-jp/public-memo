@@ -473,3 +473,33 @@ mainSteps:
 | vue-cli-plugin-vue-next | Vue 2プロジェクトでVue CLIを使用し、`vue-next`プラグインを追加します： `vue add vue-next` | Vue 2プロジェクトをVue 3に移行するためのVue CLIプラグインを提供し、Composition APIへのコンポーネントクラスとデコレータの移行をサポートします。 | プラグインをインストールしたら、以下のコマンドを実行して移行アシスタントを起動します： `vue invoke vue-next` |
 
 これらのツールの詳細な使用法と設定オプションは、個々のプロジェクトと要件に応じて異なる場合があるため、使用する前にそれぞれのドキュメントを確認してください。移行プロセスはプロジェクトの複雑性に応じて異なる場合があり、コードの移行後にテストと確認を行うことが重要です。
+
+
+import boto3
+
+def lambda_handler(event, context):
+    # 创建 EC2 客户端
+    ec2 = boto3.client('ec2')
+
+    # 获取所有 EC2 实例
+    instances = ec2.describe_instances()
+    large_instances = []
+
+    for reservation in instances['Reservations']:
+        for instance in reservation['Instances']:
+            instance_id = instance['InstanceId']
+            # 检查每个实例的所有卷
+            for block_device in instance.get('BlockDeviceMappings', []):
+                volume_id = block_device.get('Ebs', {}).get('VolumeId', '')
+                if volume_id:
+                    volume = ec2.describe_volumes(VolumeIds=[volume_id])
+                    size = volume['Volumes'][0]['Size']
+                    # 如果卷大于 10 GB，则添加到列表
+                    if size > 10:
+                        large_instances.append(instance_id)
+                        break
+
+    return {
+        'statusCode': 200,
+        'body': large_instances
+    }
