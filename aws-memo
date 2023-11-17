@@ -532,3 +532,33 @@ def lambda_handler(event, context):
     )
 
     return response
+
+
+import boto3
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2')
+    cloud9 = boto3.client('cloud9')
+
+    # 查询所有 EBS 卷
+    volumes_response = ec2.describe_volumes()
+    volumes = volumes_response['Volumes']
+    ebs_instance_ids = set()  # 存储所有 EBS 卷附加的实例 ID
+
+    for volume in volumes:
+        for attachment in volume['Attachments']:
+            ebs_instance_ids.add(attachment['InstanceId'])
+
+    # 查询所有 Cloud9 环境的实例 ID
+    cloud9_instance_ids = set()
+    cloud9_envs = cloud9.list_environments()['environmentIds']
+    for env_id in cloud9_envs:
+        env_info = cloud9.describe_environments(environmentIds=[env_id])
+        for env in env_info['environments']:
+            if 'ec2InstanceId' in env:
+                cloud9_instance_ids.add(env['ec2InstanceId'])
+
+    # 找出两个集合的交集，即既有 EBS 卷又是 Cloud9 环境的实例
+    matching_instance_ids = ebs_instance_ids.intersection(cloud9_instance_ids)
+
+    return list(matching_instance_ids)
