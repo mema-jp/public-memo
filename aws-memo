@@ -503,3 +503,32 @@ def lambda_handler(event, context):
         'statusCode': 200,
         'body': large_instances
     }
+
+
+import boto3
+import json
+from datetime import datetime
+
+def lambda_handler(event, context):
+    # ... 前面的代码逻辑 ...
+
+    # 假设 large_instances 是一个包含大于 10 GB 卷的 EC2 实例 ID 的列表
+    large_instances = get_large_instances()  # 自定义函数来获取实例列表
+
+    evaluations = []
+    for instance_id in large_instances:
+        evaluations.append({
+            "ComplianceResourceType": "AWS::EC2::Instance",
+            "ComplianceResourceId": instance_id,
+            "ComplianceType": "NON_COMPLIANT",
+            "OrderingTimestamp": datetime.utcnow().isoformat() + 'Z'
+        })
+
+    config = boto3.client('config')
+
+    response = config.put_evaluations(
+        Evaluations=evaluations,
+        ResultToken=event['resultToken']
+    )
+
+    return response
