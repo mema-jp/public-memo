@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  app:
+    image: openjdk:17-alpine
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: "./mvnw spring-boot:run"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/yourdbname
+      SPRING_DATASOURCE_USERNAME: yourdbuser
+      SPRING_DATASOURCE_PASSWORD: yourdbpassword
+
+  db:
+    image: postgres:alpine
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: yourdbname
+      POSTGRES_USER: yourdbuser
+      POSTGRES_PASSWORD: yourdbpassword
+
+volumes:
+  dbdata:
