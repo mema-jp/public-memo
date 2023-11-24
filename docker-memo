@@ -35,3 +35,7 @@ volumes:
 
 @echo off
 PowerShell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content example.txt) | Set-Content -NoNewline -Encoding utf8 example.txt"
+
+
+@echo off
+PowerShell -NoProfile -ExecutionPolicy Bypass -Command "$Content = Get-Content filename -Raw; $Content -split '`r`n' | Set-Content filename -NoNewline"
