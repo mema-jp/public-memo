@@ -1,0 +1,25 @@
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public class MouseOperations
+{
+    [DllImport("user32.dll", EntryPoint = "SetCursorPos")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+
+    public const int MOUSEEVENTF_LEFTDOWN = 0x02;
+    public const int MOUSEEVENTF_LEFTUP = 0x04;
+}
+"@
+
+# 移动鼠标到(200, 150)的位置
+[MouseOperations]::SetCursorPos(200, 150)
+
+# 执行鼠标左键点击
+[MouseOperations]::mouse_event([MouseOperations]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+[MouseOperations]::mouse_event([MouseOperations]::MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
