@@ -23,3 +23,48 @@ public class MouseOperations
 # 执行鼠标左键点击
 [MouseOperations]::mouse_event([MouseOperations]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
 [MouseOperations]::mouse_event([MouseOperations]::MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public class MouseOperations
+{
+    [DllImport("user32.dll", EntryPoint = "SetCursorPos")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto, ExactSpelling = true)]
+    public static extern short GetAsyncKeyState(int virtualKeyCode);
+
+    public const int MOUSEEVENTF_LEFTDOWN = 0x02;
+    public const int MOUSEEVENTF_LEFTUP = 0x04;
+    public const int VK_ESCAPE = 0x1B;
+}
+"@
+
+# 初始鼠标位置
+$x = 100
+$y = 100
+
+# 持续移动鼠标
+while ($true) {
+    [MouseOperations]::SetCursorPos($x, $y)
+
+    # 改变鼠标位置
+    $x += 10
+    $y += 10
+
+    # 检查是否按下ESC键来退出循环
+    if ([MouseOperations]::GetAsyncKeyState([MouseOperations]::VK_ESCAPE) -ne 0) {
+        break
+    }
+
+    # 等待一小段时间
+    Start-Sleep -Milliseconds 100
+}
