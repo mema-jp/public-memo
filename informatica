@@ -1,0 +1,21 @@
+Azure Blob Storageを中間ストレージとして使用する方法
+
+流れ：まずAzure FilesからAzure Blob Storageへファイルを移動し、その後CIHでAzure Blob Storageをデータソースとして使用する。
+利点：InformaticaがAzure Blob Storageを直接サポートしているため、実装が比較的簡単。
+手順：
+Azure FilesからAzure Blob Storageへデータを移動（Azure Data Factoryなどのツールで自動化可能）。
+CIHでAzure Blob Storageコネクタを設定。
+CIHでデータ同期または統合プロセスを設定。
+REST APIを使用する方法
+
+流れ：カスタムロジックを記述し、Azure StorageのREST APIを直接使用してAzure Files内のデータにアクセスする。
+利点：Azure Files内のデータに直接アクセス可能で、柔軟性が高い。
+手順：
+CIHでHTTP接続を作成・設定し、Azure FilesのREST APIを呼び出す。
+認証、データ取得、フォーマット変換を含むAPI呼び出しロジックを記述。
+これらのAPI呼び出しをCIHのデータ処理フローに統合。
+総合的な考慮
+
+技術的な難易度：Azure Blob Storageを中間ストレージとして使用する方が技術的には容易。REST APIを直接使用する場合は、より深い技術知識とカスタム開発が必要。
+パフォーマンスと効率：Azure Blob Storageを使用する方法は追加のデータ転送ステップが必要かもしれないが、REST API方法はデータアクセスの効率が高い可能性がある。
+維持管理と拡張性：長期的な維持管理とシステムの拡張性を考慮する必要がある。REST API方法はより多くの維持管理作業が必要になる場合がある。
