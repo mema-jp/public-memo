@@ -562,3 +562,25 @@ def lambda_handler(event, context):
     matching_instance_ids = ebs_instance_ids.intersection(cloud9_instance_ids)
 
     return list(matching_instance_ids)
+
+
+import json
+
+def lambda_handler(event, context):
+    # 打印接收到的事件
+    print(json.dumps(event))
+
+    # 获取 AWS Config 事件详细信息
+    config_item = event.get('detail').get('configurationItem')
+    resource_type = config_item.get('resourceType')
+
+    # 检查是否为 EBS 卷的事件
+    if resource_type == 'AWS::EC2::Volume':
+        volume_id = config_item.get('resourceId')
+        relationships = config_item.get('relationships', [])
+
+        # 搜索与 EC2 实例的关联
+        for relation in relationships:
+            if relation.get('resourceType') == 'AWS::EC2::Instance':
+                instance_id = relation.get('resourceId')
+                print(f"EBS Volume {volume_id} is related to Instance {instance_id}")
