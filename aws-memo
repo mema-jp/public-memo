@@ -584,3 +584,55 @@ def lambda_handler(event, context):
             if relation.get('resourceType') == 'AWS::EC2::Instance':
                 instance_id = relation.get('resourceId')
                 print(f"EBS Volume {volume_id} is related to Instance {instance_id}")
+
+
+import json
+import boto3
+
+def lambda_handler(event, context):
+    # 打印接收到的事件
+    print("Received event: " + json.dumps(event, indent=2))
+
+    # 解析事件详情
+    detail = event.get('detail', {})
+    config_item = detail.get('configurationItem', {})
+    resource_type = config_item.get('resourceType')
+    resource_id = config_item.get('resourceId')
+    config_change_status = detail.get('messageType')
+
+    # 检查资源类型是否为EC2实例
+    if resource_type == 'AWS::EC2::Instance':
+        update_ec2_iam_role(resource_id, '新的IAM角色名称')
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Lambda function executed successfully!')
+    }
+
+def update_ec2_iam_role(instance_id, new_role_name):
+    ec2 = boto3.client('ec2')
+    iam = boto3.client('iam')
+
+    try:
+        # 获取新角色的实例配置文件ARN
+        role = iam.get_role(RoleName=new_role_name)
+        instance_profile_arn = role['Role']['Arn']
+
+        # 检查并解除现有的IAM实例配置文件
+        instance = ec2.describe_instances(InstanceIds=[instance_id])['Reservations'][0]['Instances'][0]
+        if 'IamInstanceProfile' in instance:
+            existing_profile_arn = instance['IamInstanceProfile']['Arn']
+            ec2.disassociate_iam_instance_profile(
+                AssociationId=existing_profile_arn.split('/')[-1]
+            )
+
+        # 关联新的IAM实例配置文件
+        ec2.associate_iam_instance_profile(
+            IamInstanceProfile={
+                'Arn': instance_profile_arn
+            },
+            InstanceId=instance_id
+        )
+        print(f"Updated IAM role for instance {instance_id} to {new_role_name}")
+    except Exception as e:
+        print(f"Error updating IAM role for instance {instance_id}: {e}")
