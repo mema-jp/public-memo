@@ -1,0 +1,40 @@
+import boto3
+import json
+
+def lambda_handler(event, context):
+    cloud9_client = boto3.client('cloud9')
+    config_client = boto3.client('config')
+
+    evaluating_resource = event['invokingEvent']['configurationItem']
+    resource_type = evaluating_resource['resourceType']
+    environment_id = evaluating_resource['resourceId']
+
+    if resource_type == 'AWS::Cloud9::EnvironmentEC2':
+        # Check if the Cloud9 environment is deleted
+        if evaluating_resource['configurationItemStatus'] == 'ResourceDeleted':
+            # Implement logic to handle the deletion of a Cloud9 environment
+            handle_deleted_environment(config_client, environment_id)
+        else:
+            # Existing logic for evaluating storage size
+            # ...
+
+def handle_deleted_environment(config_client, environment_id):
+    # Check if the environment was previously non-compliant
+    non_compliant = check_previous_compliance(config_client, environment_id)
+
+    if non_compliant:
+        # Update the compliance status to NOT_APPLICABLE or delete the evaluation record
+        # This depends on your specific requirements
+        update_compliance_status(config_client, environment_id, 'NOT_APPLICABLE')
+
+def check_previous_compliance(config_client, environment_id):
+    # Implement logic to check if the environment was previously non-compliant
+    # Placeholder function - needs actual implementation
+    return True # Placeholder return value
+
+def update_compliance_status(config_client, environment_id, compliance_type):
+    # Implement logic to update the compliance status
+    # Placeholder function - needs actual implementation
+    pass
+
+# Rest of the lambda function...
