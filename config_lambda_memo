@@ -6,6 +6,58 @@ def lambda_handler(event, context):
     config_client = boto3.client('config')
 
     evaluating_resource = event['invokingEvent']['configurationItem']
+
+    # Check if the resource is a Cloud9 environment
+    if evaluating_resource['resourceType'] == 'AWS::Cloud9::EnvironmentEC2':
+        environment_id = evaluating_resource['resourceId']
+
+        try:
+            # Get the details of the Cloud9 environment
+            response = cloud9_client.describe_environments(environmentIds=[environment_id])
+            environment = response['environments'][0]
+
+            # Check storage size (assuming the size is available in 'environment')
+            # This is a simplification. You may need to adjust the logic based on actual API response
+            storage_size = get_storage_size(environment)
+
+            if storage_size > 15:
+                compliance_type = 'NON_COMPLIANT'
+            else:
+                compliance_type = 'COMPLIANT'
+
+        except cloud9_client.exceptions.NotFoundException:
+            # Handle the case where the Cloud9 environment is deleted
+            compliance_type = 'NOT_APPLICABLE'
+
+        # Send the evaluation result to AWS Config
+        config_client.put_evaluations(
+            Evaluations=[
+                {
+                    'ComplianceResourceType': evaluating_resource['resourceType'],
+                    'ComplianceResourceId': environment_id,
+                    'ComplianceType': compliance_type,
+                    'OrderingTimestamp': evaluating_resource['configurationItemCaptureTime']
+                },
+            ],
+            ResultToken=event['resultToken']
+        )
+
+def get_storage_size(environment):
+    # Implement logic to extract storage size from the environment details
+    # Placeholder function - needs actual implementation based on Cloud9 API response
+    return 10 # Placeholder return value
+
+
+
+
+import boto3
+import json
+
+def lambda_handler(event, context):
+    cloud9_client = boto3.client('cloud9')
+    config_client = boto3.client('config')
+
+    evaluating_resource = event['invokingEvent']['configurationItem']
     resource_type = evaluating_resource['resourceType']
     environment_id = evaluating_resource['resourceId']
 
