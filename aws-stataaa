@@ -1,0 +1,90 @@
+{
+  "Comment": "蓝绿部署与自动缩放协调状态机",
+  "StartAt": "CheckScalingStatus",
+  "States": {
+    "CheckScalingStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:region:account-id:function:check-scaling-status",
+      "Next": "IsScaling",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Fail"
+        }
+      ]
+    },
+    "IsScaling": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.scaling",
+          "BooleanEquals": true,
+          "Next": "WaitForScaling"
+        },
+        {
+          "Variable": "$.scaling",
+          "BooleanEquals": false,
+          "Next": "ExecuteDeployment"
+        }
+      ],
+      "Default": "Fail"
+    },
+    "WaitForScaling": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "CheckScalingStatus"
+    },
+    "ExecuteDeployment": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:region:account-id:function:execute-deployment",
+      "Next": "HealthCheck",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Fail"
+        }
+      ]
+    },
+    "HealthCheck": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:region:account-id:function:health-check",
+      "Next": "TrafficDecision",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Fail"
+        }
+      ]
+    },
+    "TrafficDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.health",
+          "StringEquals": "Healthy",
+          "Next": "SwitchTraffic"
+        },
+        {
+          "Variable": "$.health",
+          "StringEquals": "Unhealthy",
+          "Next": "Rollback"
+        }
+      ],
+      "Default": "Fail"
+    },
+    "SwitchTraffic": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:region:account-id:function:switch-traffic",
+      "End": true
+    },
+    "Rollback": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:region:account-id:function:rollback",
+      "End": true
+    },
+    "Fail": {
+      "Type": "Fail",
+      "Cause": "An error occurred"
+    }
+  }
+}
