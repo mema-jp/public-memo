@@ -1,1 +1,99 @@
 
+#!/usr/bin/expect
+
+# パラメータを取得
+set protocol [lindex $argv 0]
+set host [lindex $argv 1]
+set user [lindex $argv 2]
+set pass [lindex $argv 3]
+set dir [lindex $argv 4]
+set error_log [lindex $argv 5]
+
+# ログファイルを開く
+set logfile_id [open $error_log "a"]
+
+# プロトコルに基づいて適切な操作を実行
+if { $protocol == "sftp" } {
+    log_user 1
+    spawn sftp $user@$host
+    expect "password:"
+    send "$pass\r"
+    expect "sftp> "
+    send "cd $dir\r"
+    expect "sftp> "
+    send "ls temp_*\r"
+    expect {
+        "sftp> " {
+            set files [lindex [split $expect_out(buffer) "\n"] 1 end]
+            foreach file $files {
+                set old_filename [lindex [split $file "/"] end]
+                set new_filename [string trimleft $old_filename "temp_"]
+                set new_filename [string trimright $new_filename "_temp"]
+
+                send "rename $dir/$old_filename $dir/$new_filename\r"
+                expect {
+                    "sftp> " {
+                        puts "ファイルが重名されました: $old_filename -> $new_filename"
+                    }
+                    default {
+                        puts "エラー: $old_filename の重名に失敗しました" >&2
+                        puts $logfile_id "エラー: $old_filename の重名に失敗しました"
+                    }
+                }
+            }
+        }
+        default {
+            puts "エラー: ディレクトリ $dir のファイルリスト取得に失敗しました" >&2
+            puts $logfile_id "エラー: ディレクトリ $dir のファイルリスト取得に失敗しました"
+        }
+    }
+    send "bye\r"
+    expect eof
+} elseif { $protocol == "ftp" } {
+    log_user 1
+    spawn ftp $host
+    expect "Name*:"
+    send "$user\r"
+    expect "Password:"
+    send "$pass\r"
+    expect "ftp>"
+    send "cd $dir\r"
+    expect "ftp>"
+    send "ls temp_*\r"
+    expect {
+        "ftp>" {
+            set files [split $expect_out(buffer) "\n"]
+            foreach file $files {
+                if {[string match "temp_*" $file]} {
+                    set old_filename [lindex [split $file " "] end]
+                    set new_filename [string trimleft $old_filename "temp_"]
+                    set new_filename [string trimright $new_filename "_temp"]
+
+                    send "rename $old_filename $new_filename\r"
+                    expect {
+                        "ftp>" {
+                            puts "ファイルが重名されました: $old_filename -> $new_filename"
+                        }
+                        default {
+                            puts "エラー: $old_filename の重名に失敗しました" >&2
+                            puts $logfile_id "エラー: $old_filename の重名に失敗しました"
+                        }
+                    }
+                }
+            }
+        }
+        default {
+            puts "エラー: ディレクトリ $dir のファイルリスト取得に失敗しました" >&2
+            puts $logfile_id "エラー: ディレクトリ $dir のファイルリスト取得に失敗しました"
+        }
+    }
+    send "bye\r"
+    expect eof
+} else {
+    puts "エラー: 不明なプロトコル $protocol" >&2
+    puts $logfile_id "エラー: 不明なプロトコル $protocol"
+    exit 1
+}
+
+# ログファイルを閉じる
+close $logfile_id
