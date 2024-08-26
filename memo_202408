@@ -97,3 +97,114 @@ if { $protocol == "sftp" } {
 
 # ログファイルを閉じる
 close $logfile_id
+
+
+
+#!/usr/bin/expect
+
+# パラメータを取得
+set protocol [lindex $argv 0]
+set host [lindex $argv 1]
+set user [lindex $argv 2]
+set pass [lindex $argv 3]
+set dir [lindex $argv 4]
+set error_log [lindex $argv 5]
+
+# ログファイルを開く
+set logfile_id [open $error_log "a"]
+
+# プロトコルに基づく初期設定
+if { $protocol == "sftp" } {
+    set spawn_cmd "sftp $user@$host"
+    set pass_prompt "password:"
+    set cd_cmd "cd $dir"
+    set ls_cmd "ls TEMP_ABC*_T0n_TEMP"
+    set rename_cmd "rename"
+    set bye_cmd "bye"
+    set prompt "sftp> "
+} elseif { $protocol == "ftp" } {
+    set spawn_cmd "ftp $host"
+    set pass_prompt "Password:"
+    set cd_cmd "cd $dir"
+    set ls_cmd "ls TEMP_ABC*_T0n_TEMP"
+    set rename_cmd "rename"
+    set bye_cmd "bye"
+    set prompt "ftp> "
+} else {
+    puts "エラー: 不明なプロトコル $protocol" >&2
+    puts $logfile_id "エラー: 不明なプロトコル $protocol"
+    exit 1
+}
+
+# コマンドを実行
+log_user 1
+spawn $spawn_cmd
+
+# 接続エラーハンドリング
+expect {
+    "$pass_prompt" {
+        send "$pass\r"
+    }
+    timeout {
+        puts "エラー: サーバーに接続できません: $host" >&2
+        puts $logfile_id "エラー: サーバーに接続できません: $host"
+        exit 1
+    }
+    eof {
+        puts "エラー: 接続が拒否されました: $host" >&2
+        puts $logfile_id "エラー: 接続が拒否されました: $host"
+        exit 1
+    }
+}
+
+expect {
+    "$prompt" {
+        send "$cd_cmd\r"
+        expect "$prompt"
+        send "$ls_cmd\r"
+        expect {
+            "$prompt" {
+                set files [lindex [split $expect_out(buffer) "\n"] 1 end]
+                foreach file $files {
+                    if {$protocol == "ftp"} {
+                        set old_filename [lindex [split $file " "] end]
+                    } else {
+                        set old_filename [lindex [split $file "/"] end]
+                    }
+
+                    # "TEMP_"を削除し、"_TEMP"も削除して、真ん中の部分を抽出
+                    set base_name [string trimleft $old_filename "TEMP_"]
+                    set base_name [string trimright $base_name "_TEMP"]
+                    
+                    # ABC* の部分を抽出
+                    set new_filename [string range $base_name 0 end-4]
+
+                    send "$rename_cmd $old_filename $new_filename\r"
+                    expect {
+                        "$prompt" {
+                            puts "ファイルがリネームされました: $old_filename -> $new_filename"
+                        }
+                        default {
+                            puts "エラー: $old_filename のリネームに失敗しました" >&2
+                            puts $logfile_id "エラー: $old_filename のリネームに失敗しました"
+                        }
+                    }
+                }
+            }
+            default {
+                puts "エラー: ディレクトリ $dir のファイルリスト取得に失敗しました" >&2
+                puts $logfile_id "エラー: ディレクトリ $dir のファイルリスト取得に失敗しました"
+            }
+        }
+    }
+    default {
+        puts "エラー: パスワード認証に失敗しました: $host" >&2
+        puts $logfile_id "エラー: パスワード認証に失敗しました: $host"
+    }
+}
+
+send "$bye_cmd\r"
+expect eof
+
+# ログファイルを閉じる
+close $logfile_id
