@@ -217,3 +217,36 @@ Sub GenerateSQLFromLargeFile()
     MsgBox "SQL文件生成完毕！", vbInformation
 
 End Sub
+
+
+import pandas as pd
+
+# 定义Excel文件路径、SQL模板文件路径和输出SQL文件路径
+excel_file_path = 'C:/Path/To/Data.xlsx'
+template_file_path = 'C:/Path/To/Template.sql'
+output_sql_file_path = 'C:/Path/To/Output.sql'
+
+# 读取SQL模板文件
+with open(template_file_path, 'r') as template_file:
+    sql_template = template_file.read()
+
+# 读取Excel文件，获取指定字段的所有值
+df = pd.read_excel(excel_file_path, sheet_name='Sheet1')
+
+# 假设要读取的字段名称是 'FieldA'
+df = df[['FieldA']].dropna()
+
+# 固定值
+fixed_value = 5
+
+# 将FieldA的值与固定值5组合成元组的字符串形式 (FieldA, 5)
+values_str = ", ".join([f"({str(row['FieldA']).replace('\'', '\'\'')}, {fixed_value})" for _, row in df.iterrows()])
+
+# 替换SQL模板中的占位符 {{Condition}} 为生成的IN条件
+sql_query = sql_template.replace("{{Condition}}", values_str)
+
+# 将生成的SQL查询写入文件
+with open(output_sql_file_path, 'w') as sql_file:
+    sql_file.write(sql_query)
+
+print("SQL文件生成完毕！")
