@@ -125,3 +125,95 @@ Sub GenerateSQLFromSelectedFile()
     MsgBox "SQL文件生成完毕！", vbInformation
 
 End Sub
+
+
+
+Sub GenerateSQLFromLargeFile()
+
+    ' 定义变量
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim fieldA As String
+    Dim fieldB As String
+    Dim conditions As String
+    Dim sqlTemplate As String
+    Dim sqlQuery As String
+    Dim templateFilePath As String
+    Dim outputFilePath As String
+    Dim fileNum As Integer
+    Dim externalWorkbook As Workbook
+    Dim externalFilePath As String
+    
+    ' 让用户选择外部数据文件
+    externalFilePath = Application.GetOpenFilename("Excel Files (*.xlsx), *.xlsx", , "请选择数据文件")
+
+    ' 如果用户取消选择，则退出
+    If externalFilePath = "False" Then
+        MsgBox "未选择文件，操作取消。", vbExclamation
+        Exit Sub
+    End If
+
+    ' 打开外部数据文件
+    Set externalWorkbook = Workbooks.Open(externalFilePath)
+    Set ws = externalWorkbook.Sheets("Sheet1") ' 替换为外部文件中的工作表名称
+
+    ' 获取最后一行
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    ' 初始化SQL条件
+    conditions = ""
+
+    ' 逐行读取和处理数据
+    For i = 2 To lastRow
+        fieldA = ws.Cells(i, 1).Value
+        fieldB = ws.Cells(i, 2).Value
+        conditions = conditions & " AND (" & fieldA & " = '" & fieldB & "')"
+
+        ' 定期写入文件，避免内存占用过大
+        If i Mod 10000 = 0 Then
+            ' 读取SQL模板文件
+            templateFilePath = "C:\Path\To\Your\Template.sql" ' 替换为你的SQL模板文件路径
+            fileNum = FreeFile
+            Open templateFilePath For Input As fileNum
+            sqlTemplate = Input$(LOF(fileNum), fileNum)
+            Close fileNum
+
+            ' 将条件替换到SQL模板中
+            sqlQuery = Replace(sqlTemplate, "{{Condition}}", Mid(conditions, 6)) ' 去掉第一个"AND"
+
+            ' 输出生成的SQL到文件
+            outputFilePath = "C:\Path\To\Your\Output.sql" ' 替换为你想保存的文件路径
+            fileNum = FreeFile
+            Open outputFilePath For Append As fileNum
+            Print #fileNum, sqlQuery
+            Close fileNum
+
+            ' 重置条件字符串
+            conditions = ""
+        End If
+    Next i
+
+    ' 处理剩余的条件
+    If conditions <> "" Then
+        templateFilePath = "C:\Path\To\Your\Template.sql" ' 替换为你的SQL模板文件路径
+        fileNum = FreeFile
+        Open templateFilePath For Input As fileNum
+        sqlTemplate = Input$(LOF(fileNum), fileNum)
+        Close fileNum
+
+        sqlQuery = Replace(sqlTemplate, "{{Condition}}", Mid(conditions, 6)) ' 去掉第一个"AND"
+
+        outputFilePath = "C:\Path\To\Your\Output.sql" ' 替换为你想保存的文件路径
+        fileNum = FreeFile
+        Open outputFilePath For Append As fileNum
+        Print #fileNum, sqlQuery
+        Close fileNum
+    End If
+
+    ' 关闭外部数据文件
+    externalWorkbook.Close False ' 不保存任何更改
+
+    MsgBox "SQL文件生成完毕！", vbInformation
+
+End Sub
