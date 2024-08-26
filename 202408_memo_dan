@@ -1,0 +1,55 @@
+Sub GenerateSQLFromExcel()
+
+    ' 定义变量
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim fieldA As Variant
+    Dim fieldB As Variant
+    Dim conditions As String
+    Dim sqlTemplate As String
+    Dim sqlQuery As String
+    Dim templateFilePath As String
+    Dim outputFilePath As String
+    Dim dataArray As Variant
+    Dim fileNum As Integer
+
+    ' 设置工作表
+    Set ws = ThisWorkbook.Sheets("Sheet1") ' 替换为你的工作表名称
+
+    ' 获取最后一行
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+
+    ' 将数据加载到数组
+    dataArray = ws.Range("A2:B" & lastRow).Value
+
+    ' 初始化SQL条件
+    conditions = ""
+
+    ' 在内存中循环遍历数据，生成SQL条件
+    For i = LBound(dataArray, 1) To UBound(dataArray, 1)
+        fieldA = dataArray(i, 1)
+        fieldB = dataArray(i, 2)
+        conditions = conditions & " AND (" & fieldA & " = '" & fieldB & "')"
+    Next i
+
+    ' 读取SQL模板文件
+    templateFilePath = "C:\Path\To\Your\Template.sql" ' 替换为你的SQL模板文件路径
+    fileNum = FreeFile
+    Open templateFilePath For Input As fileNum
+    sqlTemplate = Input$(LOF(fileNum), fileNum)
+    Close fileNum
+
+    ' 将条件替换到SQL模板中
+    sqlQuery = Replace(sqlTemplate, "{{Condition}}", Mid(conditions, 6)) ' 去掉第一个"AND"
+
+    ' 输出生成的SQL到文件
+    outputFilePath = "C:\Path\To\Your\Output.sql" ' 替换为你想保存的文件路径
+    fileNum = FreeFile
+    Open outputFilePath For Output As fileNum
+    Print #fileNum, sqlQuery
+    Close fileNum
+
+    MsgBox "SQL文件生成完毕！", vbInformation
+
+End Sub
