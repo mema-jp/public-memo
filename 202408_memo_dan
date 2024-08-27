@@ -331,3 +331,63 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
+import pyodbc
+
+def connect_to_access_db(db_path):
+    connection_str = (
+        r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
+        r'DBQ=' + db_path + ';'
+    )
+    conn = pyodbc.connect(connection_str)
+    return conn
+
+def create_table_if_not_exists(conn):
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Employees (
+            ID AUTOINCREMENT PRIMARY KEY,
+            Name TEXT,
+            Age INTEGER,
+            JobTitle TEXT
+        )
+    ''')
+    conn.commit()
+
+def batch_insert_data(conn, data):
+    cursor = conn.cursor()
+    cursor.executemany('''
+        INSERT INTO Employees (Name, Age, JobTitle)
+        VALUES (?, ?, ?)
+    ''', data)
+    conn.commit()
+
+def main():
+    db_path = 'C:/Path/To/YourDatabase.accdb'
+
+    # 连接到Access数据库
+    conn = connect_to_access_db(db_path)
+
+    # 创建表（如果不存在）
+    create_table_if_not_exists(conn)
+
+    # 要批量插入的数据
+    data = [
+        ('Alice', 30, 'Engineer'),
+        ('Bob', 25, 'Designer'),
+        ('Charlie', 35, 'Manager'),
+        # 更多记录...
+    ]
+
+    # 批量插入数据
+    batch_insert_data(conn, data)
+
+    # 关闭数据库连接
+    conn.close()
+
+    print(f"成功导入 {len(data)} 条记录到 Access 数据库。")
+
+if __name__ == '__main__':
+    main()
