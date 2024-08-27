@@ -250,3 +250,84 @@ with open(output_sql_file_path, 'w') as sql_file:
     sql_file.write(sql_query)
 
 print("SQL文件生成完毕！")
+
+
+
+
+import re
+
+def parse_query_results_from_log(file_path):
+    logs = []
+    current_result = None
+    capture_result = False
+    field_line_buffer = ""
+    in_multiline_field = False
+    
+    with open(file_path, 'r') as file:
+        for line in file:
+            stripped_line = line.strip()
+
+            # 检查是否进入多行字段名的状态，使用 $$ 作为换行标识
+            if re.match(r'^.*\$\$', stripped_line) and not in_multiline_field:
+                in_multiline_field = True
+                field_line_buffer += stripped_line.replace('$$', '').strip()  # 去除$$并继续缓冲
+                continue
+            
+            # 检查是否结束多行字段名的状态
+            if in_multiline_field:
+                field_line_buffer += " " + stripped_line.replace('$$', '').strip()
+                if not stripped_line.endswith('$$'):
+                    in_multiline_field = False
+                continue
+
+            # 如果字段名跨越了多行且已完整捕获，则处理并开始捕获结果
+            if field_line_buffer and not in_multiline_field:
+                if re.match(r'^[\w\s]+(\s*\t\s*[\w\s]+)+$', field_line_buffer):
+                    # 保存前一个查询的结果
+                    if capture_result and current_result:
+                        logs.append(current_result)
+                    current_result = []
+                    capture_result = True
+                    field_line_buffer = ""  # 重置字段缓冲区
+                else:
+                    field_line_buffer = ""  # 重置字段缓冲区，如果不是合法的字段名格式
+
+            # 匹配新的字段名行，如果有缓冲区的字段名行则使用它
+            if re.match(r'^[\w\s]+(\s*\t\s*[\w\s]+)+$', stripped_line):
+                # 保存前一个查询的结果
+                if capture_result and current_result:
+                    logs.append(current_result)
+                current_result = []
+                capture_result = True
+
+            # 停止捕获的条件，例如遇到空行或其他标志行
+            if capture_result:
+                if not stripped_line or stripped_line.startswith('Summary:'):
+                    capture_result = False
+                    if current_result:
+                        logs.append(current_result)
+                    current_result = None
+                    continue
+
+            # 捕获查询结果内容
+            if capture_result:
+                current_result.append(stripped_line)
+
+        # 处理最后一个查询结果
+        if capture_result and current_result:
+            logs.append(current_result)
+
+    return logs
+
+def main():
+    log_file_path = 'C:/Path/To/oracle_log.txt'
+
+    # 解析Oracle的SQL执行日志，从字段名开始提取查询结果
+    logs = parse_query_results_from_log(log_file_path)
+
+    # 输出查询结果
+    for i, result in enumerate(logs, start=1):
+        print(f"Result {i}:\n" + "\n".join(result) + "\n")
+
+if __name__ == '__main__':
+    main()
