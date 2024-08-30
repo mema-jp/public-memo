@@ -208,3 +208,50 @@ expect eof
 
 # ログファイルを閉じる
 close $logfile_id
+
+
+#!/usr/bin/expect
+
+set timeout -1
+set host "ftp.example.com"
+set username "your_username"
+set password "your_password"
+set directory "/path/to/directory"
+
+# 启动 FTP 会话
+spawn ftp $host
+
+# 期待用户名提示
+expect "Name*:"
+send "$username\r"
+
+# 期待密码提示
+expect "Password:"
+send "$password\r"
+
+# 进入目标目录
+expect "ftp>"
+send "cd $directory\r"
+
+# 执行 ls 命令
+expect "ftp>"
+send "ls\r"
+
+# 捕获 ls 输出
+expect {
+    -re "(ftp>.*)" {
+        set output $expect_out(buffer)
+    }
+}
+
+# 退出 FTP 会话
+expect "ftp>"
+send "bye\r"
+
+# 处理捕获的输出
+# 过滤只提取文件名
+foreach line [split $output "\n"] {
+    if {[regexp {(\s*\S+\s+){8}(.+)$} $line match filename]} {
+        puts $filename
+    }
+}
