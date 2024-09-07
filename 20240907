@@ -12,3 +12,32 @@ services:
     stdin_open: true
     tty: true
     command: ["cmd.exe"]  # 启动时不会自动执行脚本
+
+
+# 使用 Windows Server Core 作为基础镜像
+FROM mcr.microsoft.com/windows/servercore:ltsc2019
+
+# 设置 PowerShell 作为默认 Shell
+SHELL ["powershell", "-Command"]
+
+# 下载并安装 Anaconda
+RUN Invoke-WebRequest -Uri https://repo.anaconda.com/archive/Anaconda3-2021.11-Windows-x86_64.exe -OutFile C:\Anaconda3.exe; \
+    Start-Process C:\Anaconda3.exe -ArgumentList '/InstallationType=JustMe /AddToPath=1 /RegisterPython=0 /S /D=C:\Anaconda3' -NoNewWindow -Wait; \
+    Remove-Item C:\Anaconda3.exe
+
+# 添加 Anaconda 到系统 PATH
+RUN setx /M PATH $($Env:PATH + ";C:\Anaconda3;C:\Anaconda3\Scripts;C:\Anaconda3\Library\bin")
+
+# 下载并安装 Microsoft Access Database Engine 64位
+RUN Invoke-WebRequest -Uri https://download.microsoft.com/download/5/D/9/5D9C9D4B-8E8A-4A70-991D-8A2B9206C6EF/AccessDatabaseEngine_X64.exe -OutFile C:\AccessDatabaseEngine_X64.exe; \
+    Start-Process C:\AccessDatabaseEngine_X64.exe -ArgumentList '/quiet' -NoNewWindow -Wait; \
+    Remove-Item C:\AccessDatabaseEngine_X64.exe
+
+# 确保 conda 初始化（为了在每次启动时自动激活 base 环境）
+RUN conda init powershell
+
+# 创建工作目录
+WORKDIR C:\workspace
+
+# 启动时进入 PowerShell
+CMD ["powershell"]
