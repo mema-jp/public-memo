@@ -391,3 +391,32 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
+# 使用 Windows Server Core 作为基础镜像
+FROM mcr.microsoft.com/windows/servercore:ltsc2019
+
+# 设置 PowerShell 环境以安装 Python 和 Access ODBC 驱动
+SHELL ["powershell", "-Command"]
+
+# 安装 Python
+RUN Invoke-WebRequest -Uri https://www.python.org/ftp/python/3.9.0/python-3.9.0-amd64.exe -OutFile python.exe; \
+    Start-Process python.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1' -NoNewWindow -Wait; \
+    Remove-Item -Force python.exe
+
+# 安装 Microsoft Access ODBC 驱动 (64 位)
+RUN Invoke-WebRequest -Uri https://download.microsoft.com/download/5/D/9/5D9C9D4B-8E8A-4A70-991D-8A2B9206C6EF/AccessDatabaseEngine_X64.exe -OutFile AccessDatabaseEngine.exe; \
+    Start-Process AccessDatabaseEngine.exe -ArgumentList '/quiet' -NoNewWindow -Wait; \
+    Remove-Item -Force AccessDatabaseEngine.exe
+
+# 安装 pip 和所需的 Python 库
+RUN python -m ensurepip --upgrade; \
+    python -m pip install --upgrade pip; \
+    pip install pyodbc pandas
+
+# 设置工作目录
+WORKDIR /app
+
+# 设置为命令行模式，允许手动执行脚本
+CMD ["cmd.exe"]
