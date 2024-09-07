@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  access_app:
+    build: .
+    container_name: access_python_container
+    platform: windows
+    volumes:
+      - ./app:/app  # 将本地 app 目录共享到容器中的 /app 目录
+      - ./database:/database  # 将本地 database 目录共享到容器中的 /database 目录
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: ["cmd.exe"]  # 启动时不会自动执行脚本
