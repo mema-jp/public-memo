@@ -22,3 +22,22 @@
 
 	1.	私の日本語表現を自然に修正してくれたこと。
 	2.	私の通常の作業を制限してしまったこと。
+
+
+
+
+kubectl get pods -n <namespace> -l app=kafka
+
+kubectl exec -it <kafka-pod> -n <namespace> -- /bin/bash
+kafka-console-producer.sh --broker-list <broker-list> --topic <test-topic>
+
+kafka-console-consumer.sh --bootstrap-server <broker-list> --topic <test-topic> --from-beginning
+
+kubectl get svc -n <namespace>
+
+kubectl port-forward svc/kafka 9092:9092 -n <namespace>
+
+kubectl logs <kafka-pod> -n <namespace>
+kubectl logs <zookeeper-pod> -n <namespace>
+
+
