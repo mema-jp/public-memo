@@ -40,4 +40,20 @@ kubectl port-forward svc/kafka 9092:9092 -n <namespace>
 kubectl logs <kafka-pod> -n <namespace>
 kubectl logs <zookeeper-pod> -n <namespace>
 
+１、お互い情報共有も例
+　（今日の動き）
+互相情报共有不足，导致多余的作业发生（客户跟能见之间，能见跟我们之间）
+1889的测试点？
+　
+２、やり方の例
+能见的指示方式跟能见所想的不匹配
+1905的发布issues的review
+
+
+３、お客様と能見さんと分岐がある
+
+
+
+４、我们的不足
+考虑不足，擅自着手的作业增加汇报
 
