@@ -57,3 +57,7 @@ kubectl logs <zookeeper-pod> -n <namespace>
 ４、我们的不足
 考虑不足，擅自着手的作业增加汇报
 
+
+
+
+pg_dump -h <server-name>.postgres.database.azure.com -U <username>@<server-name> -d <database-name> -t <table1> -t <table2> -t <table3> -F c -f <output-file>.sql
