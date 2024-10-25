@@ -114,3 +114,24 @@ $jsonString = $jsonString -replace ' (?=[{}:,])|(?<=[{}:,]) ', ''
 
 # 输出单行 JSON 字符串
 $jsonString
+
+
+# 输入的 JSON 字符串
+$jsonString = '{
+    "key1": "value1",
+    "key2": {
+        "subKey1": "subValue1",
+        "subKey2": "subValue2"
+    },
+    "key3": ["item1", "item2"],
+    "key4": 123,
+    "key5": true,
+    "key6": null
+}'
+
+# 使用正则表达式只替换顶层键，不替换子对象中的键
+# 匹配示例：顶层的 "key":
+$jsonString = $jsonString -replace '("([^"]+)")(\s*:\s*)(?=\{|\[|[^,]*,)', '""$3'
+
+# 输出处理后的 JSON 字符串
+$jsonString
