@@ -1,0 +1,93 @@
+# 递归解析 JSON 字符串中的键值对，并生成对象
+function Parse-JsonString {
+    param (
+        [string]$jsonString
+    )
+
+    # 使用正则表达式提取完整的键值对，包括嵌套对象
+    $matches = [regex]::Matches($jsonString, '"[^"]*"\s*:\s*(\{[^}]*\}|\[[^\]]*\]|"[^"]*"|[^,]*)')
+
+    # 创建一个空的哈希表来存储对象
+    $jsonObject = @{}
+
+    foreach ($match in $matches) {
+        $keyValuePair = $match.Value
+
+        # 提取键和值
+        $key = ($keyValuePair -replace '\s*:\s*.*$', '').Trim()
+        $key = $key -replace '^"|"$', ''  # 去掉引号
+        $value = ($keyValuePair -replace '^.*:\s*', '').Trim()
+
+        # 判断值的类型并处理
+        if ($value -match '^\{.*\}$') {
+            # 子对象，递归解析
+            $jsonObject[$key] = Parse-JsonString $value
+        } elseif ($value -match '^\[.*\]$') {
+            # 数组
+            $jsonObject[$key] = Parse-ArrayString $value
+        } elseif ($value -match '^".*"$') {
+            # 字符串，去掉引号
+            $jsonObject[$key] = $value -replace '^"|"$', ''
+        } elseif ($value -match '^(true|false)$') {
+            # 布尔值
+            $jsonObject[$key] = [bool]::Parse($value)
+        } elseif ($value -match '^null$') {
+            # 空值
+            $jsonObject[$key] = $null
+        } elseif ($value -match '^\d+(\.\d+)?$') {
+            # 数字
+            $jsonObject[$key] = [double]::Parse($value)
+        } else {
+            # 无法识别的内容，直接保留原始值
+            $jsonObject[$key] = $value
+        }
+    }
+
+    return $jsonObject
+}
+
+# 递归解析数组中的元素
+function Parse-ArrayString {
+    param (
+        [string]$arrayString
+    )
+
+    # 去掉方括号并分割数组元素
+    $arrayString = $arrayString -replace '^\[|\]$', ''
+    $elements = $arrayString -split '\s*,\s*'
+
+    $array = @()
+
+    foreach ($element in $elements) {
+        if ($element -match '^\{.*\}$') {
+            # 如果是对象，递归解析
+            $array += Parse-JsonString $element
+        } elseif ($element -match '^".*"$') {
+            # 字符串，去掉引号
+            $array += $element -replace '^"|"$', ''
+        } elseif ($element -match '^(true|false)$') {
+            # 布尔值
+            $array += [bool]::Parse($element)
+        } elseif ($element -match '^null$') {
+            # 空值
+            $array += $null
+        } elseif ($element -match '^\d+(\.\d+)?$') {
+            # 数字
+            $array += [double]::Parse($element)
+        } else {
+            # 原始值
+            $array += $element
+        }
+    }
+
+    return $array
+}
+
+# 示例带有嵌套对象和数组的 JSON 字符串
+$jsonString = '{ "key1": "value1, still part of value1", "key2": { "subKey1": "subValue1", "subKey2": "subValue2" }, "key3": ["item1", "item2"], "key4": 123, "key5": true, "key6": null }'
+
+# 解析 JSON 字符串
+$parsedObject = Parse-JsonString $jsonString
+
+# 显示解析后的对象
+$parsedObject | Format-List
