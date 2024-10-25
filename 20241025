@@ -91,3 +91,26 @@ $parsedObject = Parse-JsonString $jsonString
 
 # 显示解析后的对象
 $parsedObject | Format-List
+
+
+# 创建一个示例对象
+$object = @{
+    key1 = "value1"
+    key2 = @{
+        subKey1 = "subValue1"
+        subKey2 = "subValue2"
+    }
+    key3 = @("item1", "item2")
+    key4 = 123
+    key5 = $true
+    key6 = $null
+}
+
+# 转换为 JSON 并压缩为单行字符串
+$jsonString = ($object | ConvertTo-Json -Depth 5) -replace '\s+', ' '
+
+# 移除多余的空白字符
+$jsonString = $jsonString -replace ' (?=[{}:,])|(?<=[{}:,]) ', ''
+
+# 输出单行 JSON 字符串
+$jsonString
