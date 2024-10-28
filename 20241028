@@ -1,0 +1,62 @@
+可以通过以下步骤来验证在 PostgreSQL 中为父表添加新字段后，该字段是否会自动出现在分区表中。以下是验证方案：
+
+1. 创建分区父表和分区表
+
+首先，创建一个父表并将其分区，以便后续可以观察到新字段的变化：
+
+-- 创建一个分区父表
+CREATE TABLE parent_table (
+    id SERIAL PRIMARY KEY,
+    data TEXT
+) PARTITION BY RANGE (id);
+
+-- 创建两个分区表
+CREATE TABLE parent_table_part1 PARTITION OF parent_table FOR VALUES FROM (1) TO (100);
+CREATE TABLE parent_table_part2 PARTITION OF parent_table FOR VALUES FROM (100) TO (200);
+
+2. 在父表中插入数据，验证结构
+
+向父表插入一些数据，确保分区正常运作。然后查看 parent_table 以及分区表的结构：
+
+-- 向父表插入数据
+INSERT INTO parent_table (data) VALUES ('Test Data 1'), ('Test Data 2');
+
+-- 查看表结构
+\d+ parent_table
+\d+ parent_table_part1
+\d+ parent_table_part2
+
+3. 向父表添加新字段
+
+在父表中添加一个新的字段 new_column，观察分区表是否会同步更新：
+
+-- 在父表中添加新字段
+ALTER TABLE parent_table ADD COLUMN new_column TEXT;
+
+4. 再次查看分区表的结构
+
+使用 \d+ 命令查看父表和分区表的结构，确认 new_column 字段是否自动添加到分区表中：
+
+-- 查看表结构，验证新字段是否出现在分区表中
+\d+ parent_table
+\d+ parent_table_part1
+\d+ parent_table_part2
+
+5. 验证结论
+
+如果 new_column 字段出现在 parent_table_part1 和 parent_table_part2 分区表中，则验证了在 PostgreSQL 中为分区父表添加字段时，分区表会自动同步新字段。
+
+补充：查看分区字段信息
+
+可以使用以下查询查看分区表的所有字段，以确保字段同步：
+
+SELECT 
+    column_name, data_type, table_name
+FROM 
+    information_schema.columns
+WHERE 
+    table_name IN ('parent_table', 'parent_table_part1', 'parent_table_part2')
+ORDER BY 
+    table_name, column_name;
+
+通过这种方式，你可以验证 PostgreSQL 的分区表是否自动继承父表的新字段。
