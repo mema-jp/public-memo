@@ -1,1 +1,12 @@
 
+-- 查看共享缓冲区的使用情况
+SELECT
+    pg_size_pretty(pg_total_relation_size(relid)) AS table_size,
+    pg_size_pretty(pg_stat_get_blocks_hit(relid) * current_setting('block_size')::int) AS buffer_cache_hit,
+    pg_size_pretty(pg_stat_get_blocks_read(relid) * current_setting('block_size')::int) AS buffer_cache_miss,
+    relname AS table_name
+FROM
+    pg_stat_all_tables
+ORDER BY
+    pg_total_relation_size(relid) DESC
+LIMIT 10;
