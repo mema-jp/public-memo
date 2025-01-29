@@ -1,0 +1,17 @@
+gitlab_rails['omniauth_providers'] = [
+  {
+    name: "saml",
+    label: "Keycloak SSO",
+    args: {
+      assertion_consumer_service_url: "https://gitlab.example.com/users/auth/saml/callback",
+      idp_cert: "-----BEGIN CERTIFICATE-----\n...Your IdP Certificate...\n-----END CERTIFICATE-----",
+      idp_sso_target_url: "https://keycloak.example.com/auth/realms/your-realm/protocol/saml",
+      issuer: "https://gitlab.example.com",
+      name_identifier_format: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+      attribute_statements: {
+        name: ["displayName"],  # 从 Keycloak 获取
+        email: ["mail"]         # 从 Keycloak 获取
+      }
+    }
+  }
+]
