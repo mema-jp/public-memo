@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:15.2.3-ce.0
+    container_name: gitlab
+    restart: always
+    hostname: gitlab.example.com
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.example.com';
+        gitlab_rails['omniauth_enabled'] = true;
+        gitlab_rails['omniauth_allow_single_sign_on'] = ['saml', 'ldap'];
+        gitlab_rails['omniauth_auto_link_saml_user'] = true;
+        gitlab_rails['omniauth_block_auto_created_users'] = false;
+        gitlab_rails['omniauth_providers'] = [
+          {
+            "name" => "saml",
+            "label" => "Keycloak SSO",
+            "args" => {
+              "assertion_consumer_service_url" => "http://gitlab.example.com/users/auth/saml/callback",
+              "idp_cert" => "-----BEGIN CERTIFICATE-----\nMIIC+DCCAeCgAwIBAgIJAN1wxyzAbc3v...完整的证书内容...\n-----END CERTIFICATE-----",
+              "idp_sso_target_url" => "http://keycloak:8080/auth/realms/your-realm/protocol/saml",
+              "issuer" => "http://gitlab.example.com",
+              "name_identifier_format" => "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+              "attribute_statements" => {
+                "name" => ["displayName"],
+                "email" => ["mail"]
+              }
+            }
+          }
+        ];
+        gitlab_rails['ldap_enabled'] = true;
+        gitlab_rails['ldap_servers'] = YAML.load <<-EOS
+          main:
+            label: 'LDAP'
+            host: 'openldap'
+            port: 389
+            uid: 'uid'
+            bind_dn: 'cn=admin,dc=example,dc=com'
+            password: 'admin'
+            encryption: 'plain'
+            verify_certificates: false
+            smartcard_auth: false
+            active_directory: false
+            allow_username_or_email_login: true
+            lowercase_usernames: false
+            block_auto_created_users: false
+            base: 'dc=example,dc=com'
+            user_filter: ''
+            group_base: ''
+            admin_group: ''
+            sync_ssh_keys: false
+        EOS
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2222:22"
+    volumes:
+      - /srv/gitlab/config:/etc/gitlab
+      - /srv/gitlab/logs:/var/log/gitlab
+      - /srv/gitlab/data:/var/opt/gitlab
+    networks:
+      - internal_network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    restart: always
+    environment:
+      KC_DB: "postgres"
+      KC_DB_URL: "jdbc:postgresql://postgres:5432/keycloak"
+      KC_DB_USERNAME: "keycloak"
+      KC_DB_PASSWORD: "keycloak"
+      KEYCLOAK_ADMIN: "admin"
+      KEYCLOAK_ADMIN_PASSWORD: "admin"
+    command: start-dev
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - internal_network
+
+  openldap:
+    image: osixia/openldap:latest
+    container_name: openldap
+    restart: always
+    environment:
+      LDAP_ORGANISATION: "Example Corp"
+      LDAP_DOMAIN: "example.com"
+      LDAP_ADMIN_PASSWORD: "admin"
+    ports:
+      - "389:389"
+      - "636:636"
+    networks:
+      - internal_network
+
+  ldap-admin:
+    image: osixia/phpldapadmin:latest
+    container_name: ldap-admin
+    restart: always
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: "openldap"
+      PHPLDAPADMIN_HTTPS: "false"
+    ports:
+      - "6443:443"
+    depends_on:
+      - openldap
+    networks:
+      - internal_network
+
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_DB: "keycloak"
+      POSTGRES_USER: "keycloak"
+      POSTGRES_PASSWORD: "keycloak"
+    volumes:
+      - /srv/postgres/data:/var/lib/postgresql/data
+    networks:
+      - internal_network
+
+networks:
+  internal_network:
+    driver: bridge
