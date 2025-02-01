@@ -28,6 +28,21 @@ services:
                 "email" => ["mail"]
               }
             }
+          },
+          {
+            "name" => "saml",
+            "label" => "Okta SSO",
+            "args" => {
+              "assertion_consumer_service_url" => "http://gitlab.example.com/users/auth/saml/callback",
+              "idp_cert" => "-----BEGIN CERTIFICATE-----\nMIIC+DCCAeCgAwIBAgIJAN1wxyzAbc3v...完整的Okta证书...\n-----END CERTIFICATE-----",
+              "idp_sso_target_url" => "https://YOUR_OKTA_DOMAIN/sso/saml",
+              "issuer" => "http://gitlab.example.com",
+              "name_identifier_format" => "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+              "attribute_statements" => {
+                "name" => ["displayName"],
+                "email" => ["mail"]
+              }
+            }
           }
         ];
         gitlab_rails['ldap_enabled'] = true;
