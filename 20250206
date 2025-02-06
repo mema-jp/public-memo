@@ -133,3 +133,77 @@ Sub ImportTSVFilesByYear_LimitedSheetName()
     MsgBox "所有TSV文件已按年份导入完成！", vbInformation
 End Sub
 
+
+
+
+Sub SaveSheetsByGroup()
+    Dim ws As Worksheet
+    Dim sheetGroups As Object
+    Dim baseName As String
+    Dim cleanedName As String
+    Dim wbNew As Workbook
+    Dim savePath As String
+    Dim mainPath As String
+    Dim sheetName As String
+    
+    ' 选择保存路径
+    With Application.FileDialog(msoFileDialogFolderPicker)
+        .Title = "选择保存Excel文件的文件夹"
+        If .Show = -1 Then
+            mainPath = .SelectedItems(1) & "\"
+        Else
+            Exit Sub
+        End If
+    End With
+
+    ' 创建字典（存储 Sheet 按组分类）
+    Set sheetGroups = CreateObject("Scripting.Dictionary")
+
+    ' 遍历当前 Workbook 的所有 Sheet
+    For Each ws In ThisWorkbook.Sheets
+        sheetName = ws.Name
+        If InStr(sheetName, "_") > 0 Then
+            ' 去掉年份部分，保留 "_ 之后的字符串"
+            baseName = Mid(sheetName, InStr(sheetName, "_") + 1)
+            cleanedName = Replace(baseName, " ", "_") ' 替换空格为 "_"
+            
+            ' 如果字典中没有该组，则创建
+            If Not sheetGroups.exists(cleanedName) Then
+                sheetGroups.Add cleanedName, Array()
+            End If
+            
+            ' 将 Sheet 加入该组
+            sheetGroups(cleanedName) = sheetGroups(cleanedName) & "," & ws.Name
+        End If
+    Next ws
+
+    ' 遍历 Sheet 组并保存到不同的 Excel 文件
+    For Each baseName In sheetGroups.keys
+        ' 创建新的 Excel 文件
+        Set wbNew = Workbooks.Add
+        Application.DisplayAlerts = False
+        ' 删除默认创建的多余 Sheet
+        Do While wbNew.Sheets.Count > 1
+            wbNew.Sheets(1).Delete
+        Loop
+        Application.DisplayAlerts = True
+
+        ' 遍历该组的 Sheet，并复制到新文件
+        Dim sheetList() As String
+        sheetList = Split(sheetGroups(baseName), ",")
+        Dim i As Integer
+        For i = 1 To UBound(sheetList) ' 第一个元素为空，所以从 1 开始
+            ThisWorkbook.Sheets(sheetList(i)).Copy After:=wbNew.Sheets(wbNew.Sheets.Count)
+        Next i
+
+        ' 生成保存路径
+        savePath = mainPath & cleanedName & ".xlsx"
+
+        ' 保存新文件
+        wbNew.SaveAs savePath, FileFormat:=xlOpenXMLWorkbook
+        wbNew.Close False
+    Next baseName
+
+    MsgBox "所有分组 Sheet 已成功保存！", vbInformation
+End Sub
+
