@@ -51,3 +51,85 @@ Sub ImportTSVFilesByYear()
     Application.ScreenUpdating = True ' 重新打开屏幕更新
     MsgBox "所有TSV文件已按年份导入完成！", vbInformation
 End Sub
+
+
+
+
+Sub ImportTSVFilesByYear_LimitedSheetName()
+    Dim mainFolderPath As String
+    Dim yearFolder As String
+    Dim fileName As String
+    Dim filePath As String
+    Dim ws As Worksheet
+    Dim qt As QueryTable
+    Dim fso As Object
+    Dim folder As Object
+    Dim existingSheetNames As Object
+    Dim baseSheetName As String
+    Dim finalSheetName As String
+    Dim counter As Integer
+
+    ' 选择主文件夹（包含按年份分类的子文件夹）
+    With Application.FileDialog(msoFileDialogFolderPicker)
+        .Title = "选择包含按年份分类的TSV文件的主文件夹"
+        If .Show = -1 Then
+            mainFolderPath = .SelectedItems(1) & "\"
+        Else
+            Exit Sub
+        End If
+    End With
+
+    Application.ScreenUpdating = False ' 关闭屏幕更新，提高执行速度
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set existingSheetNames = CreateObject("Scripting.Dictionary") ' 用于存储已使用的 Sheet 名称
+
+    ' 遍历主文件夹中的所有子文件夹（按年份存放）
+    For Each folder In fso.GetFolder(mainFolderPath).SubFolders
+        yearFolder = folder.Name ' 获取年份（文件夹名）
+
+        ' 遍历该年份文件夹中的所有TSV文件
+        fileName = Dir(folder.Path & "\*.tsv")
+        Do While fileName <> ""
+            filePath = folder.Path & "\" & fileName
+            
+            ' 生成 Sheet 名称（格式: 年份_文件名）
+            baseSheetName = yearFolder & "_" & Left(fileName, InStrRev(fileName, ".") - 1) ' 去掉后缀
+            
+            ' 处理非法字符
+            baseSheetName = Replace(Replace(Replace(baseSheetName, "/", "_"), "\", "_"), "?", "_")
+            
+            ' 限制 Sheet 名称长度（31 个字符）
+            If Len(baseSheetName) > 31 Then
+                baseSheetName = Left(baseSheetName, 27) ' 预留 4 个字符用于编号
+            End If
+            
+            ' 避免 Sheet 名称重复
+            finalSheetName = baseSheetName
+            counter = 1
+            Do While existingSheetNames.exists(finalSheetName)
+                finalSheetName = baseSheetName & "_" & counter
+                counter = counter + 1
+            Loop
+            existingSheetNames.Add finalSheetName, True
+
+            ' 创建新 Sheet
+            Set ws = ThisWorkbook.Sheets.Add
+            ws.Name = finalSheetName
+
+            ' 使用 QueryTable 导入数据
+            Set qt = ws.QueryTables.Add(Connection:="TEXT;" & filePath, Destination:=ws.Range("A1"))
+            With qt
+                .TextFileConsecutiveDelimiter = False
+                .TextFileTabDelimiter = True
+                .TextFileColumnDataTypes = Array(1) ' 1 = 普通文本
+                .Refresh
+            End With
+
+            fileName = Dir ' 获取下一个文件
+        Loop
+    Next folder
+
+    Application.ScreenUpdating = True ' 重新打开屏幕更新
+    MsgBox "所有TSV文件已按年份导入完成！", vbInformation
+End Sub
+
