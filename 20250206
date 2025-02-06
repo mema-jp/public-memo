@@ -1,0 +1,53 @@
+Sub ImportTSVFilesByYear()
+    Dim mainFolderPath As String
+    Dim yearFolder As String
+    Dim fileName As String
+    Dim filePath As String
+    Dim ws As Worksheet
+    Dim qt As QueryTable
+    Dim fso As Object
+    Dim folder As Object
+    Dim subfolder As Object
+
+    ' 选择主文件夹（包含按年份分类的子文件夹）
+    With Application.FileDialog(msoFileDialogFolderPicker)
+        .Title = "选择包含按年份分类的TSV文件的主文件夹"
+        If .Show = -1 Then
+            mainFolderPath = .SelectedItems(1) & "\"
+        Else
+            Exit Sub
+        End If
+    End With
+
+    Application.ScreenUpdating = False ' 关闭屏幕更新，提高执行速度
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ' 遍历主文件夹中的所有子文件夹（按年份存放）
+    For Each folder In fso.GetFolder(mainFolderPath).SubFolders
+        yearFolder = folder.Name ' 获取年份（文件夹名）
+
+        ' 遍历该年份文件夹中的所有TSV文件
+        fileName = Dir(folder.Path & "\*.tsv")
+        Do While fileName <> ""
+            filePath = folder.Path & "\" & fileName
+            
+            ' 创建新 Sheet 并命名（年份_文件名，不带后缀）
+            Set ws = ThisWorkbook.Sheets.Add
+            ws.Name = yearFolder & "_" & Left(fileName, InStrRev(fileName, ".") - 1) ' 生成格式: 年份_文件名
+
+            ' 使用 QueryTable 导入数据
+            Set qt = ws.QueryTables.Add(Connection:="TEXT;" & filePath, Destination:=ws.Range("A1"))
+            With qt
+                .TextFileConsecutiveDelimiter = False
+                .TextFileTabDelimiter = True
+                .TextFileColumnDataTypes = Array(1) ' 1 = 普通文本
+                .Refresh
+            End With
+
+            fileName = Dir ' 获取下一个文件
+        Loop
+    Next folder
+
+    Application.ScreenUpdating = True ' 重新打开屏幕更新
+    MsgBox "所有TSV文件已按年份导入完成！", vbInformation
+End Sub
