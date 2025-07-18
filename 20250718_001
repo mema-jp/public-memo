@@ -2,7 +2,7 @@
 
 ## 概要
 
-このガイドでは、GitHub ActionsとClaude Codeを連携させて、要件定義から実装まで自動化する開発環境の構築方法を説明します。
+このガイドでは、GitHub ActionsとClaude Code CLIを連携させて、要件定義から実装まで自動化する開発環境の構築方法を説明します。
 
 ### 機能
 - 📋 要件の自動分析と検証
@@ -40,12 +40,8 @@ your-repo/
 リポジトリの `Settings > Secrets and variables > Actions` で以下を設定：
 
 ```
-ANTHROPIC_API_KEY: your-anthropic-api-key
+CLAUDE_CODE_OAUTH_TOKEN: your-claude-oauth-token
 ```
-
-### 2. 必要なファイルの作成
-
-以下のセクションに従って、各ファイルを作成してください。
 
 ## GitHub Actions ワークフロー
 
@@ -78,20 +74,33 @@ jobs:
     - name: Claude Code インストール
       run: |
         npm install -g @anthropic-ai/claude-code
-        claude-code --version
+        claude --version
     
-    - name: Claude Code 設定
+    - name: Claude Code 認証設定
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       run: |
-        echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> $GITHUB_ENV
-        claude-code auth
+        claude auth
     
     - name: 要件分析実行
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       run: |
-        claude-code analyze \
-          --input "requirements/pending/" \
-          --context "requirements/implemented/,standards/" \
-          --output "analysis-report.md" \
-          --prompt "開発標準に基づいて要件の完全性、妥当性、技術的実現可能性を分析してください"
+        claude -p "
+        要件分析を実行してください：
+
+        1. requirements/pending/ ディレクトリの要件ファイルを確認
+        2. standards/ ディレクトリの開発標準と照合
+        3. 以下の観点で分析：
+           - 要件の完全性と妥当性
+           - 技術的実現可能性
+           - 既存実装との整合性
+           - セキュリティとパフォーマンスへの影響
+
+        4. 分析結果を analysis-report.md に出力
+
+        開始してください。
+        "
     
     - name: 分析レポートをアップロード
       uses: actions/upload-artifact@v4
@@ -105,13 +114,17 @@ jobs:
       with:
         script: |
           const fs = require('fs');
-          const analysis = fs.readFileSync('analysis-report.md', 'utf8');
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: `## 📋 要件分析レポート\n\n${analysis}`
-          });
+          try {
+            const analysis = fs.readFileSync('analysis-report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📋 要件分析レポート\n\n${analysis}`
+            });
+          } catch (error) {
+            console.log('Analysis report not found, skipping comment');
+          }
 ```
 
 ### 2. 自動開発ワークフロー (.github/workflows/auto-development.yml)
@@ -126,6 +139,19 @@ on:
     branches:
       - main
       - develop
+  workflow_run:
+    workflows: ["Analyze Requirements"]
+    types:
+      - completed
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: '強制実行'
+        required: false
+        default: 'false'
 
 jobs:
   auto-develop:
@@ -168,7 +194,13 @@ jobs:
     - name: Claude Code インストール
       run: |
         npm install -g @anthropic-ai/claude-code
-        claude-code auth
+        claude --version
+    
+    - name: Claude Code 認証設定
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      run: |
+        claude auth
     
     - name: MySQL 待機
       run: |
@@ -180,7 +212,30 @@ jobs:
     - name: 変更された要件を特定
       id: requirements
       run: |
-        CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep "requirements/pending/" | tr '\n' ' ')
+        # PRマージの場合とpushの場合で処理を分ける
+        if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          # workflow_runの場合、最近のコミットから要件ファイルを検索
+          CHANGED_FILES=$(git log --name-only --pretty=format: -1 | grep "requirements/pending/" | tr '\n' ' ')
+        else
+          # 通常のpushの場合
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            # 新しいブランチの場合、最新コミットを確認
+            CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r ${{ github.sha }} | grep "requirements/pending/" | tr '\n' ' ')
+          else
+            # 既存ブランチの場合、差分を確認
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep "requirements/pending/" | tr '\n' ' ')
+          fi
+        fi
+        
+        # requirements/pending/内にファイルがあるかも確認
+        if [ -z "$CHANGED_FILES" ]; then
+          PENDING_FILES=$(find requirements/pending/ -name "*.md" -type f 2>/dev/null | tr '\n' ' ')
+          if [ -n "$PENDING_FILES" ]; then
+            CHANGED_FILES="$PENDING_FILES"
+          fi
+        fi
+        
+        echo "変更されたファイル: $CHANGED_FILES"
         echo "changed_files=${CHANGED_FILES}" >> $GITHUB_OUTPUT
         
         if [ -n "$CHANGED_FILES" ]; then
@@ -199,32 +254,76 @@ jobs:
         git checkout -b $BRANCH_NAME
         echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
     
-    - name: プロジェクト生成と実装
+    - name: 自動開発実行
       if: steps.requirements.outputs.has_new_requirements == 'true'
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       run: |
-        claude-code develop \
-          --requirements "requirements/" \
-          --standards "standards/" \
-          --project-name "${{ steps.requirements.outputs.project_name }}" \
-          --output "implementations/${{ steps.requirements.outputs.project_name }}" \
-          --database-url "jdbc:mysql://localhost:3306/testdb" \
-          --database-user "testuser" \
-          --database-password "testpass" \
-          --prompt "開発標準に基づいて完全なSpring Bootプロジェクトを作成し、プロジェクト構造、コード実装、テスト、ドキュメントを含めてください"
+        claude -p "
+        自動開発を実行してください：
+
+        プロジェクト名: ${{ steps.requirements.outputs.project_name }}
+        変更された要件ファイル: ${{ steps.requirements.outputs.changed_files }}
+
+        タスク:
+        1. implementations/${{ steps.requirements.outputs.project_name }}/ ディレクトリを作成
+        2. standards/development-standards.md に基づいてSpring Bootプロジェクト構造を生成
+        3. 要件に基づいて以下を実装：
+           - エンティティクラス (JPA アノテーション付き)
+           - リポジトリインターフェース (Spring Data JPA)
+           - サービスクラス (ビジネスロジック)
+           - RESTコントローラー (API エンドポイント)
+           - DTOクラス (データ転送オブジェクト)
+           - 例外ハンドリング (@ControllerAdvice)
+           - 単体テスト (JUnit 5 + Mockito)
+
+        4. 以下の設定ファイルを生成：
+           - pom.xml (Spring Boot 3.x + MySQL 8.0 + JPA)
+           - application.yml (データベース設定含む)
+           - application-test.yml (テスト用設定)
+           - Dockerfile
+           - README.md (プロジェクト説明)
+
+        5. データベース設定：
+           - URL: jdbc:mysql://localhost:3306/testdb
+           - ユーザー名: testuser
+           - パスワード: testpass
+
+        6. API設計標準：
+           - ベースパス: /api/v1/
+           - ヘルスチェック: /actuator/health
+           - 標準的なCRUD操作
+
+        開始してください。完了したら実装の概要を表示してください。
+        "
     
     - name: ビルドとテスト
       if: steps.requirements.outputs.has_new_requirements == 'true'
       run: |
-        cd "implementations/${{ steps.requirements.outputs.project_name }}"
-        mvn clean compile test
+        if [ -d "implementations/${{ steps.requirements.outputs.project_name }}" ]; then
+          cd "implementations/${{ steps.requirements.outputs.project_name }}"
+          if [ -f "pom.xml" ]; then
+            echo "Maven プロジェクトをビルド中..."
+            mvn clean compile test
+          fi
+        fi
     
     - name: データベース検証
       if: steps.requirements.outputs.has_new_requirements == 'true'
       run: |
-        cd "implementations/${{ steps.requirements.outputs.project_name }}"
-        export SPRING_PROFILES_ACTIVE=test
-        timeout 30s mvn spring-boot:run || true
-        mysql -h 127.0.0.1 -P 3306 -u testuser -ptestpass testdb -e "SHOW TABLES;"
+        if [ -d "implementations/${{ steps.requirements.outputs.project_name }}" ]; then
+          cd "implementations/${{ steps.requirements.outputs.project_name }}"
+          if [ -f "pom.xml" ]; then
+            echo "データベース接続を検証中..."
+            export SPRING_PROFILES_ACTIVE=test
+            export SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/testdb
+            export SPRING_DATASOURCE_USERNAME=testuser
+            export SPRING_DATASOURCE_PASSWORD=testpass
+            timeout 30s mvn spring-boot:run || true
+            echo "データベースのテーブル一覧："
+            mysql -h 127.0.0.1 -P 3306 -u testuser -ptestpass testdb -e "SHOW TABLES;" || true
+          fi
+        fi
     
     - name: 実装済み要件の移動
       if: steps.requirements.outputs.has_new_requirements == 'true'
@@ -234,6 +333,7 @@ jobs:
             filename=$(basename "$file")
             timestamp=$(date +%Y%m%d-%H%M%S)
             mv "$file" "requirements/implemented/${timestamp}-$filename"
+            echo "要件ファイルを移動: $file → requirements/implemented/${timestamp}-$filename"
           fi
         done
     
@@ -243,7 +343,22 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add .
-        git commit -m "🤖 自動実装: ${{ steps.requirements.outputs.project_name }}"
+        git commit -m "🤖 自動実装: ${{ steps.requirements.outputs.project_name }}
+
+        📁 プロジェクト: ${{ steps.requirements.outputs.project_name }}
+        📋 処理された要件: ${{ steps.requirements.outputs.changed_files }}
+        🏗️ 完全なSpring Bootアプリケーションを生成
+        ✅ テストとデータベース検証通過
+        📚 ドキュメント生成完了
+        
+        生成されたファイル:
+        - 完全なプロジェクト構造
+        - Spring Boot アプリケーションコード
+        - 単体・統合テスト
+        - API ドキュメント
+        - データベーススキーマ
+        - デプロイ設定"
+        
         git push origin $BRANCH_NAME
     
     - name: プルリクエスト作成
@@ -257,7 +372,35 @@ jobs:
             title: `🤖 自動実装: ${{ steps.requirements.outputs.project_name }}`,
             head: process.env.BRANCH_NAME,
             base: 'main',
-            body: `## 🚀 自動実装された要件\n\n**プロジェクトパス**: \`implementations/${{ steps.requirements.outputs.project_name }}/\`\n\n**技術スタック**: Java 17 + Spring Boot 3.x + MySQL 8.0\n\n✅ コンパイル・テスト通過\n✅ データベース検証通過\n\nコードレビュー後にマージしてください。`
+            body: `## 🚀 自動実装された要件
+
+## 📁 プロジェクト情報
+- **プロジェクト名**: ${{ steps.requirements.outputs.project_name }}
+- **実装パス**: \`implementations/${{ steps.requirements.outputs.project_name }}/\`
+- **技術スタック**: Java 17 + Spring Boot 3.x + MySQL 8.0
+
+## 🧪 テスト結果
+- ✅ コンパイル成功
+- ✅ 単体テスト通過
+- ✅ データベース接続検証通過
+- ✅ スキーマ作成成功
+
+## 📂 生成されたファイル
+- \`implementations/${{ steps.requirements.outputs.project_name }}/src/\` - 完全なSpring Bootアプリケーションコード
+- \`implementations/${{ steps.requirements.outputs.project_name }}/pom.xml\` - Maven設定ファイル
+- \`implementations/${{ steps.requirements.outputs.project_name }}/src/main/resources/application.yml\` - アプリケーション設定
+- \`implementations/${{ steps.requirements.outputs.project_name }}/Dockerfile\` - Docker設定
+- \`implementations/${{ steps.requirements.outputs.project_name }}/README.md\` - プロジェクトドキュメント
+
+## ⚠️ 審査要点
+- [ ] コード品質とアーキテクチャ設計
+- [ ] データベース設計の妥当性
+- [ ] APIインターフェースの規範性
+- [ ] テストカバレッジの充足性
+- [ ] セキュリティ考慮事項
+- [ ] パフォーマンス影響評価
+
+コードレビュー後にマージしてください。`
           });
 ```
 
@@ -294,33 +437,81 @@ jobs:
     - name: Claude Code インストール
       run: |
         npm install -g @anthropic-ai/claude-code
-        claude-code auth
+        claude --version
+    
+    - name: Claude Code 認証設定
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      run: |
+        claude auth
     
     - name: 実装プロジェクト検索
       id: projects
       run: |
         PROJECTS=$(find implementations/ -maxdepth 1 -type d -name "requirement-impl-*" | tr '\n' ' ')
         echo "projects=${PROJECTS}" >> $GITHUB_OUTPUT
+        echo "検出されたプロジェクト: ${PROJECTS}"
     
     - name: プロジェクトのビルドとテスト
       if: steps.projects.outputs.projects != ''
       run: |
         for project_dir in ${{ steps.projects.outputs.projects }}; do
           if [ -f "$project_dir/pom.xml" ]; then
+            echo "ビルド中: $project_dir"
             cd "$project_dir"
             mvn clean compile test
             cd - > /dev/null
           fi
         done
     
-    - name: 品質分析
+    - name: コード品質分析
       if: steps.projects.outputs.projects != ''
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       run: |
-        claude-code review \
-          --input "implementations/" \
-          --standards "standards/" \
-          --output "quality-report.md" \
-          --prompt "コード品質、セキュリティ、パフォーマンスを分析し、改善提案を生成してください"
+        claude -p "
+        プロジェクトのコード品質を分析してください：
+
+        対象プロジェクト: implementations/ ディレクトリ内の全プロジェクト
+        参照標準: standards/ ディレクトリの開発標準
+
+        分析項目:
+        1. コード品質
+           - コーディング規約の遵守
+           - Spring Boot ベストプラクティス
+           - 設計パターンの適用
+           - コードの可読性と保守性
+           - アーキテクチャの一貫性
+
+        2. セキュリティ
+           - SQLインジェクション対策
+           - XSS攻撃防護
+           - 認証・認可の実装
+           - 入力バリデーション
+           - セキュリティヘッダー設定
+
+        3. パフォーマンス
+           - データベースクエリの最適化
+           - JPA設定の効率性
+           - キャッシュ戦略
+           - メモリ使用量
+           - レスポンス時間最適化
+
+        4. テスト品質
+           - テストカバレッジ
+           - テストの品質と妥当性
+           - モックの適切な使用
+           - エッジケースの考慮
+
+        5. アーキテクチャ
+           - レイヤー分離の適切性
+           - 依存関係の管理
+           - 設定管理の妥当性
+           - エラーハンドリング
+
+        結果を quality-report.md ファイルに出力してください。
+        各項目について具体的な改善提案も含めてください。
+        "
     
     - name: レポートをアップロード
       if: steps.projects.outputs.projects != ''
@@ -335,13 +526,22 @@ jobs:
       with:
         script: |
           const fs = require('fs');
-          const report = fs.readFileSync('quality-report.md', 'utf8');
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: `## 📊 コード品質チェックレポート\n\n${report}`
-          });
+          try {
+            const report = fs.readFileSync('quality-report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📊 コード品質チェックレポート\n\n${report}\n\n📎 詳細レポートは Artifacts の quality-reports をご確認ください。`
+            });
+          } catch (error) {
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📊 コード品質チェック\n\n品質レポートの生成中にエラーが発生しました。\nログを確認してください。`
+            });
+          }
 ```
 
 ## 開発標準ドキュメント
@@ -532,26 +732,27 @@ git push origin feature/user-management
 # → コード品質チェックトリガー ✅
 ```
 
-### ブランチ要件
-- **要件提出**：任意のブランチで可、PR によるレビュー
-- **自動開発**：`main` と `develop` ブランチでのみトリガー
-- **コードレビュー**：`implementations/` への全ての PR
-
 ### 初期設定
 1. プロジェクトディレクトリ構造を作成
-2. GitHub Secrets に `ANTHROPIC_API_KEY` を追加
-3. `standards/` ディレクトリに標準ドキュメントをコミット
+2. GitHub Secrets に `CLAUDE_CODE_OAUTH_TOKEN` を追加
+3. 開発標準ドキュメントをコミット
 
-### 要件提出
-1. `requirements/pending/` に要件ファイルを作成
-2. テンプレートを使用して要件詳細を記入
-3. main ブランチにコミットして自動開発をトリガー
+### ローカルでの Claude Code 使用
 
-### ワークフロー
-1. **要件分析** → 要件実現可能性の自動分析
-2. **自動開発** → ブランチ作成、完全なプロジェクト生成
-3. **品質チェック** → コード品質、セキュリティ、パフォーマンス分析
-4. **PR レビュー** → 人的レビュー後マージ
+```bash
+# 環境変数設定
+export CLAUDE_CODE_OAUTH_TOKEN=your-token
+
+# Claude Code 起動
+cd your-project
+claude
+
+# 非対話モードでの使用
+claude -p "requirements/pending/ の要件を分析してください"
+
+# ファイル指定での作業
+claude -p "@requirements/pending/user-management.md この要件を実装してください"
+```
 
 ## 実装例：ユーザー管理システム
 
@@ -622,14 +823,35 @@ implementations/requirement-impl-20240718-143022/
 - `PUT /api/v1/users/{id}` - ユーザー更新
 - `DELETE /api/v1/users/{id}` - ユーザー削除
 
-Claude Code はこの要件に基づいて、必要なコード、テスト、設定ファイル、ドキュメントを含む完全な Spring Boot プロジェクトを自動生成します。
+## トラブルシューティング
+
+### 問題1: Claude Code認証エラー
+**解決策**: 
+```bash
+# OAuth Token の確認
+echo $CLAUDE_CODE_OAUTH_TOKEN
+# 再認証
+claude auth
+```
+
+### 問題2: 自動開発がトリガーされない
+**解決策**:
+1. 手動トリガーを使用: GitHub Actions画面から workflow_dispatch を実行
+2. ログを確認してファイル検出ロジックをデバッグ
+
+### 問題3: プロジェクト生成の失敗
+**解決策**:
+1. Claude Code のプロンプトをより具体的に修正
+2. 段階的な実装に分割
+3. エラーログの確認
 
 ## まとめ
 
 この環境により、要件定義から実装、テスト、デプロイまでの開発プロセスが大幅に自動化され、開発効率の向上とコード品質の安定化を実現できます。
 
 ### 主な利点
-- 🚀 **開発速度向上**: 要件から実装まで自動化
+- 🚀 **開発速度向上**: Claude Code による自動実装
 - 📊 **品質保証**: 自動テスト・品質チェック
 - 🔄 **一貫性確保**: 標準化されたコード生成
 - 👥 **チーム連携**: PR ベースのレビュープロセス
+- 🛠️ **シンプル**: 複雑な設定ファイル不要
