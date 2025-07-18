@@ -30,12 +30,13 @@ your-repo/
 ├── standards/
 │   ├── development-standards.md          # 開発標準
 │   └── project-structure.md              # プロジェクト構造
-├── main-project/                         # 統合プロジェクト
-│   ├── src/main/java/
-│   ├── src/main/resources/
-│   ├── src/test/java/
-│   ├── pom.xml
-│   └── README.md
+├── implementations/                      # 実装プロジェクト
+│   └── main-project/                     # 統合プロジェクト
+│       ├── src/main/java/
+│       ├── src/main/resources/
+│       ├── src/test/java/
+│       ├── pom.xml
+│       └── README.md
 └── README.md
 ```
 
@@ -253,7 +254,7 @@ jobs:
             echo "手動実行: 未処理の要件ファイルを検出"
             echo "changed_files=${PENDING_FILES}" >> $GITHUB_OUTPUT
             echo "has_new_requirements=true" >> $GITHUB_OUTPUT
-            echo "project_name=main-project" >> $GITHUB_OUTPUT
+            echo "project_name=implementations/main-project" >> $GITHUB_OUTPUT
             exit 0
           else
             echo "手動実行: 未処理の要件ファイルが見つかりません"
@@ -291,8 +292,8 @@ jobs:
         
         if [ -n "$CHANGED_FILES" ]; then
           echo "has_new_requirements=true" >> $GITHUB_OUTPUT
-          # 統合プロジェクト名を固定
-          echo "project_name=main-project" >> $GITHUB_OUTPUT
+          # 統合プロジェクト名を固定（implementationsディレクトリ内）
+          echo "project_name=implementations/main-project" >> $GITHUB_OUTPUT
         else
           echo "has_new_requirements=false" >> $GITHUB_OUTPUT
         fi
@@ -327,16 +328,16 @@ jobs:
         以下の新しい要件を既存のSpring Bootプロジェクトに追加実装してください：
 
         ## 新しい要件
-        $(cat ../${{ steps.requirements.outputs.changed_files }} 2>/dev/null || echo '要件ファイルの読み込みに失敗しました')
+        $(cat ../../${{ steps.requirements.outputs.changed_files }} 2>/dev/null || echo '要件ファイルの読み込みに失敗しました')
 
         ## 既存の実装済み要件（参考）
-        $(find ../requirements/implemented/ -name "*.md" -type f 2>/dev/null | head -3 | xargs cat 2>/dev/null || echo '既存要件なし（初回実装）')
+        $(find ../../requirements/implemented/ -name "*.md" -type f 2>/dev/null | head -3 | xargs cat 2>/dev/null || echo '既存要件なし（初回実装）')
 
         ## 開発標準
-        $(cat ../standards/development-standards.md 2>/dev/null || echo '開発標準ファイルの読み込みに失敗しました')
+        $(cat ../../standards/development-standards.md 2>/dev/null || echo '開発標準ファイルの読み込みに失敗しました')
 
         ## プロジェクト情報
-        - プロジェクト名: ${{ steps.requirements.outputs.project_name }}
+        - プロジェクト名: main-project
         - 現在のディレクトリ: ${{ steps.requirements.outputs.project_name }}（統合プロジェクト）
         - データベース: MySQL (URL: jdbc:mysql://localhost:3306/testdb, user: testuser, pass: testpass)
 
@@ -347,11 +348,63 @@ jobs:
         4. 要件に基づいて必要なエンティティ、API、サービス、テストを実装
         5. Maven設定、アプリケーション設定、ドキュメントを更新
 
+        ## 重要な注意事項
+        - .gitignore ファイルを作成し、target/, *.log, .DS_Store などを除外する
+        - pom.xml にはコード覆盖率ツール（Jacoco）は含めない
+        - CI環境向けのシンプルな設定にする
+
         実装完了後、'=== 実装完了 ===' と出力してください。
         " || echo "Claude Code実行中にエラーが発生しました"
         
+        # .gitignore ファイルを確実に作成（Claude Codeが作成しなかった場合）
+        if [ ! -f ".gitignore" ]; then
+          echo "=== .gitignore ファイルを作成中 ==="
+          cat > .gitignore << 'EOF'
+# Maven
+target/
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# IDE
+.idea/
+.vscode/
+*.iws
+*.iml
+*.ipr
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
+
+# Application
+application-local.yml
+application-local.properties
+EOF
+        fi
+        
         # 作業ディレクトリを元に戻す
-        cd ..
+        cd ../..
     
     - name: ビルドとテスト
       if: steps.requirements.outputs.has_new_requirements == 'true'
@@ -419,7 +472,42 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         
-        # 全ての変更をステージング
+        # target ディレクトリとその他の不要ファイルを除外
+        echo "=== 不要ファイルの除外 ==="
+        find . -name "target" -type d -exec rm -rf {} + 2>/dev/null || true
+        find . -name "*.log" -type f -delete 2>/dev/null || true
+        find . -name ".DS_Store" -type f -delete 2>/dev/null || true
+        
+        # .gitignore の確認と作成
+        if [ ! -f "${{ steps.requirements.outputs.project_name }}/.gitignore" ]; then
+          echo "=== .gitignore を作成中 ==="
+          cat > "${{ steps.requirements.outputs.project_name }}/.gitignore" << 'EOF'
+# Maven
+target/
+*.jar
+*.war
+*.ear
+
+# IDE  
+.idea/
+.vscode/
+*.iml
+*.ipr
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Application
+application-local.yml
+EOF
+        fi
+        
+        # 全ての変更をステージング（.gitignoreで除外されたものは自動的に除外される）
         git add .
         
         # 要件ファイル名を取得（コミットメッセージ用）
@@ -432,7 +520,8 @@ jobs:
         🏗️ 統合プロジェクト: ${{ steps.requirements.outputs.project_name }}
         ⏰ 実装日時: $(date)
         
-        Claude Code により既存プロジェクトに新機能を追加実装"
+        Claude Code により既存プロジェクトに新機能を追加実装
+        🗂️ target/ などの一時ファイルは除外済み"
         
         echo "=== プッシュ実行 ==="
         git push origin $BRANCH_NAME
@@ -539,8 +628,8 @@ jobs:
       id: projects
       run: |
         # 統合プロジェクトのパスを設定
-        if [ -d "main-project" ]; then
-          PROJECTS="main-project"
+        if [ -d "implementations/main-project" ]; then
+          PROJECTS="implementations/main-project"
           echo "projects=${PROJECTS}" >> $GITHUB_OUTPUT
           echo "検出されたプロジェクト: ${PROJECTS}"
         else
@@ -556,7 +645,7 @@ jobs:
           echo "ビルド中: $PROJECT_DIR"
           cd "$PROJECT_DIR"
           mvn clean compile test
-          cd ..
+          cd ../..
         else
           echo "pom.xml が見つかりません: $PROJECT_DIR"
         fi
@@ -698,6 +787,59 @@ implementations/{project-name}/
         <scope>test</scope>
     </dependency>
 </dependencies>
+
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-maven-plugin</artifactId>
+        </plugin>
+    </plugins>
+</build>
+```
+
+## .gitignore テンプレート
+```gitignore
+# Maven
+target/
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# IDE
+.idea/
+.vscode/
+*.iws
+*.iml
+*.ipr
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
+
+# Application
+application-local.yml
+application-local.properties
 ```
 
 ## 設定ファイルテンプレート
@@ -806,7 +948,7 @@ git push origin feature/user-management
 mkdir -p .github/workflows
 mkdir -p requirements/{implemented,pending,templates}
 mkdir -p standards
-mkdir -p main-project
+mkdir -p implementations/main-project
 
 # 空ディレクトリ保持用ファイルを作成
 touch requirements/implemented/.gitkeep
@@ -878,7 +1020,7 @@ claude -p "@requirements/pending/user-management.md この要件を実装して�
 
 ### 生成される予定のプロジェクト構造
 ```
-main-project/
+implementations/main-project/
 ├── src/main/java/com/company/app/
 │   ├── Application.java
 │   ├── controller/
@@ -897,6 +1039,7 @@ main-project/
 │   └── application-test.yml
 ├── src/test/java/
 ├── pom.xml
+├── .gitignore
 └── README.md
 ```
 
