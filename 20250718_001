@@ -1,0 +1,635 @@
+# GitHub Actions × Claude Code 自動開発環境構築ガイド
+
+## 概要
+
+このガイドでは、GitHub ActionsとClaude Codeを連携させて、要件定義から実装まで自動化する開発環境の構築方法を説明します。
+
+### 機能
+- 📋 要件の自動分析と検証
+- 🤖 Spring Boot プロジェクトの自動生成
+- 🏗️ データベーススキーマの自動設計
+- 🧪 テスト環境での自動検証
+- 📊 コード品質の自動チェック
+
+## プロジェクト構成
+
+```
+your-repo/
+├── .github/
+│   └── workflows/
+│       ├── analyze-requirements.yml      # 要件分析
+│       ├── auto-development.yml          # 自動開発
+│       └── code-quality-check.yml        # 品質チェック
+├── requirements/
+│   ├── implemented/                      # 実装済み要件
+│   ├── pending/                          # 未実装要件
+│   └── templates/
+│       └── requirement-template.md       # 要件テンプレート
+├── standards/
+│   ├── development-standards.md          # 開発標準
+│   └── project-structure.md              # プロジェクト構造
+├── implementations/                      # 実装プロジェクト
+│   └── .gitkeep
+└── README.md
+```
+
+## 事前準備
+
+### 1. GitHub Secrets の設定
+
+リポジトリの `Settings > Secrets and variables > Actions` で以下を設定：
+
+```
+ANTHROPIC_API_KEY: your-anthropic-api-key
+```
+
+### 2. 必要なファイルの作成
+
+以下のセクションに従って、各ファイルを作成してください。
+
+## GitHub Actions ワークフロー
+
+### 1. 要件分析ワークフロー (.github/workflows/analyze-requirements.yml)
+
+```yaml
+name: Analyze Requirements
+
+on:
+  pull_request:
+    paths:
+      - 'requirements/pending/**'
+    types: [opened, synchronize]
+
+jobs:
+  analyze-requirements:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: コードをチェックアウト
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Node.js セットアップ
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Claude Code インストール
+      run: |
+        npm install -g @anthropic-ai/claude-code
+        claude-code --version
+    
+    - name: Claude Code 設定
+      run: |
+        echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> $GITHUB_ENV
+        claude-code auth
+    
+    - name: 要件分析実行
+      run: |
+        claude-code analyze \
+          --input "requirements/pending/" \
+          --context "requirements/implemented/,standards/" \
+          --output "analysis-report.md" \
+          --prompt "開発標準に基づいて要件の完全性、妥当性、技術的実現可能性を分析してください"
+    
+    - name: 分析レポートをアップロード
+      uses: actions/upload-artifact@v4
+      with:
+        name: requirements-analysis
+        path: analysis-report.md
+    
+    - name: PR にコメント
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const analysis = fs.readFileSync('analysis-report.md', 'utf8');
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 📋 要件分析レポート\n\n${analysis}`
+          });
+```
+
+### 2. 自動開発ワークフロー (.github/workflows/auto-development.yml)
+
+```yaml
+name: Auto Development
+
+on:
+  push:
+    paths:
+      - 'requirements/pending/**'
+    branches:
+      - main
+      - develop
+
+jobs:
+  auto-develop:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpass
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    
+    steps:
+    - name: コードをチェックアウト
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Java セットアップ
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+    
+    - name: Node.js セットアップ
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Claude Code インストール
+      run: |
+        npm install -g @anthropic-ai/claude-code
+        claude-code auth
+    
+    - name: MySQL 待機
+      run: |
+        until mysqladmin ping -h 127.0.0.1 -P 3306 -u testuser -ptestpass --silent; do
+          echo 'MySQL の起動を待機中...'
+          sleep 5
+        done
+    
+    - name: 変更された要件を特定
+      id: requirements
+      run: |
+        CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep "requirements/pending/" | tr '\n' ' ')
+        echo "changed_files=${CHANGED_FILES}" >> $GITHUB_OUTPUT
+        
+        if [ -n "$CHANGED_FILES" ]; then
+          echo "has_new_requirements=true" >> $GITHUB_OUTPUT
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          PROJECT_NAME="requirement-impl-${TIMESTAMP}"
+          echo "project_name=${PROJECT_NAME}" >> $GITHUB_OUTPUT
+        else
+          echo "has_new_requirements=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: 開発ブランチ作成
+      if: steps.requirements.outputs.has_new_requirements == 'true'
+      run: |
+        BRANCH_NAME="auto-dev/${{ steps.requirements.outputs.project_name }}"
+        git checkout -b $BRANCH_NAME
+        echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+    
+    - name: プロジェクト生成と実装
+      if: steps.requirements.outputs.has_new_requirements == 'true'
+      run: |
+        claude-code develop \
+          --requirements "requirements/" \
+          --standards "standards/" \
+          --project-name "${{ steps.requirements.outputs.project_name }}" \
+          --output "implementations/${{ steps.requirements.outputs.project_name }}" \
+          --database-url "jdbc:mysql://localhost:3306/testdb" \
+          --database-user "testuser" \
+          --database-password "testpass" \
+          --prompt "開発標準に基づいて完全なSpring Bootプロジェクトを作成し、プロジェクト構造、コード実装、テスト、ドキュメントを含めてください"
+    
+    - name: ビルドとテスト
+      if: steps.requirements.outputs.has_new_requirements == 'true'
+      run: |
+        cd "implementations/${{ steps.requirements.outputs.project_name }}"
+        mvn clean compile test
+    
+    - name: データベース検証
+      if: steps.requirements.outputs.has_new_requirements == 'true'
+      run: |
+        cd "implementations/${{ steps.requirements.outputs.project_name }}"
+        export SPRING_PROFILES_ACTIVE=test
+        timeout 30s mvn spring-boot:run || true
+        mysql -h 127.0.0.1 -P 3306 -u testuser -ptestpass testdb -e "SHOW TABLES;"
+    
+    - name: 実装済み要件の移動
+      if: steps.requirements.outputs.has_new_requirements == 'true'
+      run: |
+        for file in ${{ steps.requirements.outputs.changed_files }}; do
+          if [ -f "$file" ]; then
+            filename=$(basename "$file")
+            timestamp=$(date +%Y%m%d-%H%M%S)
+            mv "$file" "requirements/implemented/${timestamp}-$filename"
+          fi
+        done
+    
+    - name: 変更をコミット
+      if: steps.requirements.outputs.has_new_requirements == 'true'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add .
+        git commit -m "🤖 自動実装: ${{ steps.requirements.outputs.project_name }}"
+        git push origin $BRANCH_NAME
+    
+    - name: プルリクエスト作成
+      if: steps.requirements.outputs.has_new_requirements == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.pulls.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🤖 自動実装: ${{ steps.requirements.outputs.project_name }}`,
+            head: process.env.BRANCH_NAME,
+            base: 'main',
+            body: `## 🚀 自動実装された要件\n\n**プロジェクトパス**: \`implementations/${{ steps.requirements.outputs.project_name }}/\`\n\n**技術スタック**: Java 17 + Spring Boot 3.x + MySQL 8.0\n\n✅ コンパイル・テスト通過\n✅ データベース検証通過\n\nコードレビュー後にマージしてください。`
+          });
+```
+
+### 3. コード品質チェックワークフロー (.github/workflows/code-quality-check.yml)
+
+```yaml
+name: Code Quality Check
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - 'implementations/**'
+
+jobs:
+  quality-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: コードをチェックアウト
+      uses: actions/checkout@v4
+    
+    - name: Java セットアップ
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+    
+    - name: Node.js セットアップ
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
+    - name: Claude Code インストール
+      run: |
+        npm install -g @anthropic-ai/claude-code
+        claude-code auth
+    
+    - name: 実装プロジェクト検索
+      id: projects
+      run: |
+        PROJECTS=$(find implementations/ -maxdepth 1 -type d -name "requirement-impl-*" | tr '\n' ' ')
+        echo "projects=${PROJECTS}" >> $GITHUB_OUTPUT
+    
+    - name: プロジェクトのビルドとテスト
+      if: steps.projects.outputs.projects != ''
+      run: |
+        for project_dir in ${{ steps.projects.outputs.projects }}; do
+          if [ -f "$project_dir/pom.xml" ]; then
+            cd "$project_dir"
+            mvn clean compile test
+            cd - > /dev/null
+          fi
+        done
+    
+    - name: 品質分析
+      if: steps.projects.outputs.projects != ''
+      run: |
+        claude-code review \
+          --input "implementations/" \
+          --standards "standards/" \
+          --output "quality-report.md" \
+          --prompt "コード品質、セキュリティ、パフォーマンスを分析し、改善提案を生成してください"
+    
+    - name: レポートをアップロード
+      if: steps.projects.outputs.projects != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: quality-reports
+        path: quality-report.md
+    
+    - name: PR にコメント
+      if: github.event_name == 'pull_request' && steps.projects.outputs.projects != ''
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const report = fs.readFileSync('quality-report.md', 'utf8');
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 📊 コード品質チェックレポート\n\n${report}`
+          });
+```
+
+## 開発標準ドキュメント
+
+### 1. 開発標準 (standards/development-standards.md)
+
+```markdown
+# Spring Boot 開発標準
+
+## 技術スタック
+- **Java**: 17
+- **フレームワーク**: Spring Boot 3.2+
+- **データベース**: MySQL 8.0
+- **ビルドツール**: Maven
+- **テスト**: JUnit 5 + Mockito
+
+## プロジェクト構造標準
+```
+implementations/{project-name}/
+├── src/main/java/com/company/{domain}/
+│   ├── controller/     # REST コントローラー
+│   ├── service/        # ビジネスロジック層
+│   ├── repository/     # データアクセス層
+│   ├── entity/         # JPA エンティティ
+│   ├── dto/           # データ転送オブジェクト
+│   ├── config/        # 設定クラス
+│   └── exception/     # 例外処理
+├── src/main/resources/
+│   ├── application.yml
+│   └── application-test.yml
+├── src/test/java/
+├── pom.xml
+└── README.md
+```
+
+## API 設計標準
+- **バージョン管理**: `/api/v1/`
+- **ヘルスチェック**: `/actuator/health`
+- **CRUD 操作**:
+  - GET `/api/v1/{resource}` - 一覧取得
+  - GET `/api/v1/{resource}/{id}` - 単体取得
+  - POST `/api/v1/{resource}` - 作成
+  - PUT `/api/v1/{resource}/{id}` - 更新
+  - DELETE `/api/v1/{resource}/{id}` - 削除
+
+## コーディング規約
+- Spring Boot Starter 依存関係を使用
+- レイヤードアーキテクチャの実装
+- JPA/Hibernate を使用したデータアクセス
+- 統一例外処理
+- 入力検証とデータバリデーション
+- 単体テストカバレッジ > 80%
+```
+
+### 2. プロジェクト構造テンプレート (standards/project-structure.md)
+
+```markdown
+# Spring Boot プロジェクト構造テンプレート
+
+## Maven 依存関係テンプレート
+```xml
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+        <scope>runtime</scope>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+```
+
+## 設定ファイルテンプレート
+```yaml
+spring:
+  application:
+    name: ${project.name}
+  datasource:
+    url: ${database.url}
+    username: ${database.username}
+    password: ${database.password}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+```
+```
+
+### 3. 要件テンプレート (requirements/templates/requirement-template.md)
+
+```markdown
+# 要件タイトル
+
+## 要件説明
+[要件内容とビジネス背景の詳細説明]
+
+## 機能要件
+- [ ] コア機能1
+- [ ] コア機能2
+- [ ] コア機能3
+
+## API 設計要件
+- バージョン: v1
+- パス接頭辞: /api/v1/
+- ヘルスチェックエンドポイントを含む
+- 基本的な CRUD 操作を実装
+
+## データベース要件
+- MySQL 8.0 を使用
+- データベース命名規約に従う
+- 必要なインデックス設計を含む
+
+## 受け入れ基準
+- [ ] 機能が正常に動作する
+- [ ] API インターフェースが標準に準拠
+- [ ] 単体テストカバレッジ > 80%
+- [ ] コード品質チェックが通過
+
+## 優先度
+- [ ] 高 - [ ] 中 - [ ] 低
+
+## 見積工期
+[日数]
+
+## 依存要件
+[関連要件IDまたは無し]
+```
+
+## 使用方法
+
+### ブランチ戦略とトリガー条件
+
+#### **トリガータイミング概要**：
+1. **要件分析**：`requirements/pending/` を変更する PR 時にトリガー
+2. **自動開発**：`main` または `develop` ブランチにマージ時にトリガー  
+3. **品質チェック**：`implementations/` への PR 時にトリガー
+
+#### **推奨ワークフロー**：
+```bash
+# 1. 要件ブランチ作成
+git checkout -b feature/user-management
+echo "要件内容" > requirements/pending/user-management.md
+git add . && git commit -m "ユーザー管理要件を追加"
+git push origin feature/user-management
+
+# 2. main ブランチへの PR 作成
+# → 要件分析トリガー ✅
+
+# 3. 要件分析レポート確認後、PR をマージ
+# → 自動開発トリガー ✅
+
+# 4. 自動開発完了後、実装コードの PR が自動作成される
+# → コード品質チェックトリガー ✅
+```
+
+### ブランチ要件
+- **要件提出**：任意のブランチで可、PR によるレビュー
+- **自動開発**：`main` と `develop` ブランチでのみトリガー
+- **コードレビュー**：`implementations/` への全ての PR
+
+### 初期設定
+1. プロジェクトディレクトリ構造を作成
+2. GitHub Secrets に `ANTHROPIC_API_KEY` を追加
+3. `standards/` ディレクトリに標準ドキュメントをコミット
+
+### 要件提出
+1. `requirements/pending/` に要件ファイルを作成
+2. テンプレートを使用して要件詳細を記入
+3. main ブランチにコミットして自動開発をトリガー
+
+### ワークフロー
+1. **要件分析** → 要件実現可能性の自動分析
+2. **自動開発** → ブランチ作成、完全なプロジェクト生成
+3. **品質チェック** → コード品質、セキュリティ、パフォーマンス分析
+4. **PR レビュー** → 人的レビュー後マージ
+
+## 実装例：ユーザー管理システム
+
+### 要件ファイル例 (requirements/pending/user-management.md)
+```markdown
+# ユーザー管理システム
+
+## 要件説明
+基本的なユーザー管理機能を実装し、ユーザー登録、ログイン、情報管理などを含む
+
+## 機能要件
+- [ ] ユーザー登録とログイン
+- [ ] ユーザー情報の CRUD 操作
+- [ ] ユーザーステータス管理
+
+## API 設計要件
+- バージョン: v1
+- パス: /api/v1/users
+- ヘルスチェック: /actuator/health
+- CRUD 操作:
+  - GET /api/v1/users - ユーザー一覧取得
+  - GET /api/v1/users/{id} - ユーザー詳細取得
+  - POST /api/v1/users - ユーザー作成
+  - PUT /api/v1/users/{id} - ユーザー更新
+  - DELETE /api/v1/users/{id} - ユーザー削除
+
+## データベース要件
+- ユーザーテーブル含む項目：id, username, email, password, status, created_at, updated_at
+- username と email のユニーク制約
+- 適切なインデックス設計
+
+## 受け入れ基準
+- [ ] 全ての API エンドポイントが正常動作
+- [ ] データバリデーションと例外処理
+- [ ] 単体テストカバレッジ > 80%
+- [ ] API ドキュメント生成
+
+## 優先度
+- [x] 高
+
+## 見積工期
+3日
+```
+
+### 生成される予定のプロジェクト構造
+```
+implementations/requirement-impl-20240718-143022/
+├── src/main/java/com/company/user/
+│   ├── controller/UserController.java
+│   ├── service/UserService.java
+│   ├── repository/UserRepository.java
+│   ├── entity/User.java
+│   ├── dto/UserDto.java
+│   └── exception/UserNotFoundException.java
+├── src/main/resources/
+│   ├── application.yml
+│   └── application-test.yml
+├── src/test/java/
+├── pom.xml
+└── README.md
+```
+
+### 生成される予定の API エンドポイント
+- `GET /actuator/health` - ヘルスチェック
+- `GET /api/v1/users` - ユーザー一覧
+- `GET /api/v1/users/{id}` - ユーザー詳細
+- `POST /api/v1/users` - ユーザー作成
+- `PUT /api/v1/users/{id}` - ユーザー更新
+- `DELETE /api/v1/users/{id}` - ユーザー削除
+
+Claude Code はこの要件に基づいて、必要なコード、テスト、設定ファイル、ドキュメントを含む完全な Spring Boot プロジェクトを自動生成します。
+
+## まとめ
+
+この環境により、要件定義から実装、テスト、デプロイまでの開発プロセスが大幅に自動化され、開発効率の向上とコード品質の安定化を実現できます。
+
+### 主な利点
+- 🚀 **開発速度向上**: 要件から実装まで自動化
+- 📊 **品質保証**: 自動テスト・品質チェック
+- 🔄 **一貫性確保**: 標準化されたコード生成
+- 👥 **チーム連携**: PR ベースのレビュープロセス
