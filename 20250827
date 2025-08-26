@@ -1,0 +1,295 @@
+# Contrail API IdPermsType構造解析およびGo言語定義
+
+## 概要
+
+Juniper ContrailのConfiguration APIにおいて、IdPermsTypeはシステムが管理するアイデンティティ、時刻、権限データを格納するコア複合データ型です。ほぼ全ての設定オブジェクトがid-permsプロパティを持ち、その型がIdPermsTypeとなっています。
+
+## IdPermsType構造定義
+
+XSDスキーマ定義に基づき、IdPermsTypeは以下のフィールドを含みます：
+
+### XSD定義
+
+```xml
+<xsd:complexType name="IdPermsType">
+  <xsd:all>
+    <xsd:element name="permissions" type="PermType"/>
+    <xsd:element name="uuid" type="UuidType"/>
+    <xsd:element name="enable" type="xsd:boolean"/>
+    <xsd:element name="created" type="xsd:dateTime"/>
+    <xsd:element name="last-modified" type="xsd:dateTime"/>
+    <xsd:element name="description" type="xsd:string"/>
+    <xsd:element name="user-visible" type="xsd:boolean" default="true"/>
+    <xsd:element name="creator" type="CreatorType"/>
+  </xsd:all>
+</xsd:complexType>
+```
+
+### フィールド詳細
+
+|フィールド        |型          |説明                   |デフォルト値|
+|-------------|-----------|---------------------|------|
+|permissions  |PermType   |オブジェクトの権限設定          |-     |
+|uuid         |UuidType   |オブジェクトの一意識別子         |-     |
+|enable       |boolean    |このオブジェクトを有効にするかどうか   |-     |
+|created      |dateTime   |オブジェクト作成時刻           |-     |
+|last-modified|dateTime   |オブジェクト最終更新時刻         |-     |
+|description  |string     |オブジェクトの説明            |-     |
+|user-visible |boolean    |オブジェクトがユーザーに表示されるかどうか|true  |
+|creator      |CreatorType|オブジェクト作成者情報          |-     |
+
+## 関連型定義
+
+### PermType2構造
+
+```xml
+<xsd:complexType name="PermType2">
+  <xsd:all>
+    <xsd:element name="owner" type="xsd:string" required="true"
+         description="Owner tenant of the object"/>
+    <xsd:element name="owner-access" type="AccessType" required="true" default="7"
+         description="Owner permissions of the object"/>
+    <xsd:element name="global-access" type="AccessType" required="optional" default="0"
+         description="Globally(others) shared object and permissions for others of the object"/>
+    <xsd:element name="share" type="ShareType" maxOccurs="unbounded" required="optional"
+         description="Selectively shared object, List of (tenant, permissions)"/>
+  </xsd:all>
+</xsd:complexType>
+```
+
+### ShareType構造
+
+```xml
+<xsd:complexType name="ShareType">
+  <xsd:all>
+    <xsd:element name="tenant" type="xsd:string" required="true"
+         description="Name of tenant with whom the object is shared"/>
+    <xsd:element name="tenant-access" type="AccessType" required="true"
+         description="Allowed permissions in sharing"/>
+  </xsd:all>
+</xsd:complexType>
+```
+
+## IdPermsTypeを使用するContrailオブジェクト完全一覧
+
+### ネットワーク関連オブジェクト
+
+1. **AccessControlList** - アクセス制御リスト
+- 親：VirtualNetwork または SecurityGroup
+- プロパティ：access-control-list-entries、id-perms
+1. **VirtualNetwork** - バーチャルネットワーク
+- 親：Project
+- プロパティ：route-target-list、id-perms
+1. **VirtualMachineInterface** - バーチャルマシンインターフェース
+- プロパティ：id-perms
+- 参照：VirtualNetwork、SecurityGroup
+1. **FloatingIp** - フローティングIP
+- 親：FloatingIpPool
+- プロパティ：floating-ip-address、floating-ip-is-virtual-ip、id-perms
+1. **NetworkIpam** - ネットワークIP アドレス管理
+- プロパティ：id-perms
+1. **NetworkPolicy** - ネットワークポリシー
+- プロパティ：id-perms
+1. **AliasIp** - エイリアスIP
+- 親：AliasIpPool
+- プロパティ：alias-ip-address、alias-ip-address-family、id-perms
+
+### システム設定オブジェクト
+
+1. **GlobalSystemConfig** - グローバルシステム設定
+- 親：ConfigRoot
+- プロパティ：autonomous-system、config-version、id-perms
+1. **ConfigRoot** - 設定ルート
+- プロパティ：id-perms
+1. **BgpRouter** - BGPルーター
+- プロパティ：bgp-router-parameters、id-perms
+1. **VirtualRouter** - バーチャルルーター
+- 親：GlobalSystemConfig
+- プロパティ：virtual-router-ip-address、id-perms
+1. **AnalyticsNode** - 分析ノード
+- 親：GlobalSystemConfig
+- プロパティ：analytics-node-ip-address、id-perms
+
+### 管理・監視オブジェクト
+
+1. **Project** - プロジェクト
+- プロパティ：id-perms
+1. **CustomerAttachment** - カスタマーアタッチメント
+- プロパティ：attachment-address、id-perms
+1. **Alarm** - アラーム
+- プロパティ：uve-keys、alarm-severity、alarm-rules、id-perms
+
+### セキュリティ関連オブジェクト
+
+1. **SecurityGroup** - セキュリティグループ
+- プロパティ：id-perms
+1. **InstanceIp** - インスタンスIP
+- プロパティ：id-perms
+
+### サービス関連オブジェクト
+
+1. **ServiceInstance** - サービスインスタンス
+- プロパティ：id-perms
+1. **ServiceTemplate** - サービステンプレート
+- プロパティ：id-perms
+1. **LoadbalancerPool** - ロードバランサープール
+- プロパティ：id-perms
+
+## Go言語構造定義
+
+```go
+package contrail
+
+import (
+    "time"
+)
+
+// IdPermsType システムが管理するアイデンティティ、時刻、権限データ
+type IdPermsType struct {
+    Permissions  *PermType  `json:"permissions,omitempty"`
+    UUID         *UUIDType  `json:"uuid,omitempty"`
+    Enable       *bool      `json:"enable,omitempty"`
+    Created      *time.Time `json:"created,omitempty"`
+    LastModified *time.Time `json:"last_modified,omitempty"`
+    Description  *string    `json:"description,omitempty"`
+    UserVisible  *bool      `json:"user_visible,omitempty"` // デフォルト値: true
+    Creator      *CreatorType `json:"creator,omitempty"`
+}
+
+// UUIDType UUID型定義
+type UUIDType struct {
+    UUIDMslong *int64 `json:"uuid_mslong,omitempty"`
+    UUIDLslong *int64 `json:"uuid_lslong,omitempty"`
+}
+
+// PermType 権限型定義
+type PermType struct {
+    Owner       *string     `json:"owner,omitempty"`
+    OwnerAccess *AccessType `json:"owner_access,omitempty"`
+    Group       *string     `json:"group,omitempty"`
+    GroupAccess *AccessType `json:"group_access,omitempty"`
+    OtherAccess *AccessType `json:"other_access,omitempty"`
+}
+
+// PermType2 拡張権限型定義
+type PermType2 struct {
+    Owner        *string     `json:"owner,omitempty"`
+    OwnerAccess  *AccessType `json:"owner_access,omitempty"`  // デフォルト値: 7
+    GlobalAccess *AccessType `json:"global_access,omitempty"` // デフォルト値: 0
+    Share        []ShareType `json:"share,omitempty"`
+}
+
+// ShareType 共有権限定義
+type ShareType struct {
+    Tenant       *string     `json:"tenant,omitempty"`
+    TenantAccess *AccessType `json:"tenant_access,omitempty"`
+}
+
+// AccessType アクセス権限型（通常は数値、rwx権限ビットを表す）
+type AccessType int
+
+// CreatorType 作成者情報型
+type CreatorType struct {
+    // 実際のスキーマに基づき、ユーザーID、ユーザー名などのフィールドを含む可能性
+    // さらなる詳細定義が必要
+}
+
+// 一般的なアクセス権限定数
+const (
+    AccessNone  AccessType = 0 // 000 - 権限なし
+    AccessRead  AccessType = 4 // 100 - 読み取り専用
+    AccessWrite AccessType = 2 // 010 - 書き込み専用  
+    AccessExec  AccessType = 1 // 001 - 実行
+    AccessRW    AccessType = 6 // 110 - 読み書き
+    AccessAll   AccessType = 7 // 111 - 全権限
+)
+```
+
+## 各オブジェクト型のGo構造体例
+
+```go
+// VirtualNetwork バーチャルネットワーク
+type VirtualNetwork struct {
+    Name            string                 `json:"name"`
+    FQName          []string               `json:"fq_name"`
+    ParentType      string                 `json:"parent_type"`
+    IdPerms         *IdPermsType           `json:"id_perms,omitempty"`
+    RouteTargetList *RouteTargetList       `json:"route_target_list,omitempty"`
+    NetworkIpamRefs []NetworkIpamRef       `json:"network_ipam_refs,omitempty"`
+}
+
+// AccessControlList アクセス制御リスト
+type AccessControlList struct {
+    Name                     string               `json:"name"`
+    FQName                   []string             `json:"fq_name"`
+    ParentType              string               `json:"parent_type"`
+    IdPerms                 *IdPermsType         `json:"id_perms,omitempty"`
+    AccessControlListEntries *AclEntriesType     `json:"access_control_list_entries,omitempty"`
+}
+
+// FloatingIp フローティングIP
+type FloatingIp struct {
+    Name                      string       `json:"name"`
+    FQName                    []string     `json:"fq_name"`
+    ParentType               string       `json:"parent_type"`
+    IdPerms                  *IdPermsType `json:"id_perms,omitempty"`
+    FloatingIpAddress        *string      `json:"floating_ip_address,omitempty"`
+    FloatingIpIsVirtualIp    *bool        `json:"floating_ip_is_virtual_ip,omitempty"`
+}
+
+// Project プロジェクト
+type Project struct {
+    Name        string       `json:"name"`
+    FQName      []string     `json:"fq_name"`
+    ParentType  string       `json:"parent_type"`
+    IdPerms     *IdPermsType `json:"id_perms,omitempty"`
+}
+```
+
+## 使用例
+
+```go
+// IdPermsTypeを持つバーチャルネットワークリクエストの作成
+func CreateVirtualNetworkRequest(name string, projectFQName []string) *VirtualNetwork {
+    enable := true
+    userVisible := true
+    
+    return &VirtualNetwork{
+        Name:       name,
+        FQName:     append(projectFQName, name),
+        ParentType: "project",
+        IdPerms: &IdPermsType{
+            Enable:      &enable,
+            UserVisible: &userVisible,
+            Description: StringPtr("API経由で作成されたバーチャルネットワーク"),
+        },
+    }
+}
+
+// ヘルパー関数
+func StringPtr(s string) *string {
+    return &s
+}
+
+func BoolPtr(b bool) *bool {
+    return &b
+}
+```
+
+## 注意事項
+
+1. **UUID処理**: UUIDフィールドはUuidType型で、Contrailでは128ビットUUIDを表現するために2つのint64フィールドを含む可能性があります
+1. **権限管理**: PermTypeとPermType2は異なるレベルの権限制御メカニズムを提供します
+1. **時刻形式**: createdとlast-modifiedフィールドはISO 8601形式のdateTimeを使用します
+1. **オプションフィールド**: ほとんどのフィールドはオプションで、ポインター型を使用してnull値を処理します
+1. **デフォルト値**: user-visibleフィールドのデフォルト値はtrueです
+
+## API呼び出し推奨事項
+
+Contrailクライアント作成時の推奨事項：
+
+- 作成操作では、必要なIdPermsフィールドのみを設定し、システムにUUIDとタイムスタンプを自動生成させる
+- 更新操作では、既存のUUIDとcreated時刻を変更しないよう保持する
+- 必要に応じて適切な権限レベルを設定する
+
+この構造定義はContrail APIのGo言語クライアント開発に役立つはずです。特定のオブジェクト型のさらなる構造定義が必要でしたら、どのオブジェクト型が必要かお教えください。
