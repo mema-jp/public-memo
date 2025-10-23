@@ -1,10 +1,12 @@
 import snowflake.connector
 import pymysql
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import logging
 from contextlib import contextmanager
 import hashlib
 import json
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 
 # ログ設定
 logging.basicConfig(
@@ -27,16 +29,68 @@ class DataTransfer:
         self.snowflake_config = snowflake_config
         self.mysql_config = mysql_config
     
+    @staticmethod
+    def load_private_key(private_key_path: str, passphrase: str = None):
+        """
+        秘密鍵ファイルを読み込む（パスフレーズ対応）
+        
+        :param private_key_path: 秘密鍵ファイルのパス
+        :param passphrase: 秘密鍵のパスフレーズ（オプション）
+        :return: 秘密鍵オブジェクト
+        """
+        try:
+            with open(private_key_path, 'rb') as key_file:
+                private_key_data = key_file.read()
+            
+            # パスフレーズをバイト列に変換
+            passphrase_bytes = passphrase.encode() if passphrase else None
+            
+            # 秘密鍵を読み込む
+            private_key = serialization.load_pem_private_key(
+                private_key_data,
+                password=passphrase_bytes,
+                backend=default_backend()
+            )
+            
+            # DER形式のバイト列に変換（Snowflakeが要求する形式）
+            pkb = private_key.private_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            )
+            
+            logger.info(f"✓ 秘密鍵を正常に読み込みました: {private_key_path}")
+            return pkb
+            
+        except Exception as e:
+            logger.error(f"✗ 秘密鍵の読み込みに失敗: {str(e)}")
+            raise
+    
     @contextmanager
     def get_snowflake_connection(self):
         """Snowflake接続のコンテキストマネージャー"""
         conn = None
         try:
-            conn = snowflake.connector.connect(**self.snowflake_config)
+            # 秘密鍵認証の場合、private_keyパラメータを処理
+            config = self.snowflake_config.copy()
+            
+            if 'private_key_path' in config:
+                private_key_path = config.pop('private_key_path')
+                passphrase = config.pop('private_key_passphrase', None)
+                
+                # 秘密鍵を読み込む
+                config['private_key'] = self.load_private_key(
+                    private_key_path, 
+                    passphrase
+                )
+            
+            conn = snowflake.connector.connect(**config)
+            logger.info("✓ Snowflakeに接続しました")
             yield conn
         finally:
             if conn:
                 conn.close()
+                logger.info("✓ Snowflake接続を閉じました")
     
     @contextmanager
     def get_mysql_connection(self):
@@ -48,6 +102,55 @@ class DataTransfer:
         finally:
             if conn:
                 conn.close()
+    
+    @staticmethod
+    def apply_column_mapping(source_columns: List[str], 
+                            source_rows: List[Tuple],
+                            column_mapping: Optional[Dict[str, str]] = None) -> Tuple[List[str], List[Tuple]]:
+        """
+        カラムマッピングを適用してデータを変換
+        
+        :param source_columns: ソースのカラム名リスト
+        :param source_rows: ソースのデータ行リスト
+        :param column_mapping: カラムマッピング辞書 {ソースカラム名: ターゲットカラム名}
+        :return: (マッピング後のカラム名リスト, マッピング後のデータ行リスト)
+        """
+        if not column_mapping:
+            # マッピングなしの場合、そのまま返す
+            return source_columns, source_rows
+        
+        logger.info("カラムマッピングを適用...")
+        logger.info(f"マッピング設定: {column_mapping}")
+        
+        # ソースカラム名を大文字に変換してインデックスマップを作成
+        source_columns_upper = [col.upper() for col in source_columns]
+        column_index_map = {col.upper(): idx for idx, col in enumerate(source_columns)}
+        
+        # マッピング対象のカラムとその順序を決定
+        mapped_columns = []
+        column_indices = []
+        
+        for source_col, target_col in column_mapping.items():
+            source_col_upper = source_col.upper()
+            
+            if source_col_upper not in column_index_map:
+                raise ValueError(f"ソースカラム '{source_col}' がデータに存在しません。利用可能なカラム: {source_columns}")
+            
+            mapped_columns.append(target_col)
+            column_indices.append(column_index_map[source_col_upper])
+        
+        logger.info(f"マッピング前のカラム: {source_columns}")
+        logger.info(f"マッピング後のカラム: {mapped_columns}")
+        
+        # データ行を変換（マッピングされたカラムのみ抽出）
+        mapped_rows = []
+        for row in source_rows:
+            mapped_row = tuple(row[idx] for idx in column_indices)
+            mapped_rows.append(mapped_row)
+        
+        logger.info(f"✓ カラムマッピング完了: {len(source_columns)}カラム → {len(mapped_columns)}カラム")
+        
+        return mapped_columns, mapped_rows
     
     def fetch_data_from_snowflake(self, 
                                    query: str,
@@ -340,14 +443,11 @@ class DataTransfer:
             result['is_consistent'] = False
             result['issues'].append(f"行数不一致: ソース{len(source_rows)}行, ターゲット{len(target_rows)}行")
         
-        # 2. カラム名チェック（大文字に変換して比較、Snowflakeはデフォルトで大文字）
-        source_cols_upper = [col.upper() for col in source_columns]
-        target_cols_upper = [col.upper() for col in target_columns]
-        
+        # 2. カラム名チェック（マッピング後なので同じはず）
         logger.info(f"ソースカラム名: {source_columns}")
         logger.info(f"ターゲットカラム名: {target_columns}")
         
-        if source_cols_upper != target_cols_upper:
+        if source_columns != target_columns:
             result['is_consistent'] = False
             result['issues'].append(f"カラム名不一致: ソース{source_columns}, ターゲット{target_columns}")
         
@@ -387,6 +487,7 @@ class DataTransfer:
                 source_query: str,
                 target_database: str,
                 target_table: str,
+                column_mapping: Optional[Dict[str, str]] = None,
                 source_query_params: tuple = None,
                 batch_size: int = 1000,
                 verify: bool = True,
@@ -395,13 +496,14 @@ class DataTransfer:
                 keep_backup_on_success: bool = False,
                 rollback_on_verify_fail: bool = True) -> dict:
         """
-        完全なデータ転送フローを実行（TRUNCATE + バックアップ保護）
+        完全なデータ転送フローを実行（TRUNCATE + バックアップ保護 + カラムマッピング）
         
         重要: TRUNCATEはロールバック不可のため、本メソッドはバックアップ作成を強制します！
         
         :param source_query: ソースデータクエリSQL（Snowflake）
         :param target_database: ターゲットデータベース（MySQL）
         :param target_table: ターゲットテーブル名（MySQL）
+        :param column_mapping: カラムマッピング {ソースカラム名: ターゲットカラム名}
         :param source_query_params: ソースクエリパラメータ
         :param batch_size: バッチ挿入サイズ
         :param verify: データ整合性を検証するか
@@ -425,6 +527,8 @@ class DataTransfer:
             logger.info("=" * 80)
             logger.info(f"{target_database}.{target_table} へのデータ転送を開始")
             logger.info(f"転送モード: TRUNCATE（ロールバック不可） + バックアップ保護")
+            if column_mapping:
+                logger.info(f"カラムマッピング有効: {len(column_mapping)} カラム")
             logger.info("=" * 80)
             
             # 安全性チェック: TRUNCATEを使用する場合、バックアップは必須
@@ -434,13 +538,24 @@ class DataTransfer:
             
             # 1. Snowflakeからデータを取得
             logger.info("ステップ1: Snowflakeからデータを取得...")
-            column_names, source_rows = self.fetch_data_from_snowflake(
+            source_columns, source_rows = self.fetch_data_from_snowflake(
                 source_query, source_query_params
             )
             
             if not source_rows:
                 logger.warning("ソースクエリがデータを返しませんでした、転送をスキップします")
                 return transfer_result
+            
+            # 1.5. カラムマッピングを適用
+            if column_mapping:
+                logger.info("ステップ1.5: カラムマッピングを適用...")
+                mapped_columns, mapped_rows = self.apply_column_mapping(
+                    source_columns, source_rows, column_mapping
+                )
+            else:
+                logger.info("カラムマッピングなし、元のカラム名を使用")
+                mapped_columns = source_columns
+                mapped_rows = source_rows
             
             # 2. バックアップを作成（TRUNCATEを使用する場合は必須！）
             logger.info("ステップ2: データをバックアップ...")
@@ -451,11 +566,11 @@ class DataTransfer:
             # 3. TRUNCATEしてデータを挿入
             logger.info("ステップ3: テーブルをTRUNCATEしてデータを挿入...")
             self.truncate_and_insert(
-                target_database, target_table, column_names, source_rows, batch_size
+                target_database, target_table, mapped_columns, mapped_rows, batch_size
             )
             
             transfer_result['success'] = True
-            transfer_result['rows_transferred'] = len(source_rows)
+            transfer_result['rows_transferred'] = len(mapped_rows)
             
             # 4. データ整合性検証
             if verify:
@@ -465,15 +580,15 @@ class DataTransfer:
                 
                 # ターゲットクエリを構築
                 if verify_query is None:
-                    cols_str = ', '.join(column_names)
+                    cols_str = ', '.join(mapped_columns)
                     verify_query = f"SELECT {cols_str} FROM {target_database}.{target_table}"
                 
                 # ターゲットデータを取得
                 target_columns, target_rows = self.fetch_data_from_mysql(verify_query)
                 
-                # 検証を実行
+                # 検証を実行（マッピング後のデータで比較）
                 verification_result = self.verify_data_consistency(
-                    (column_names, source_rows),
+                    (mapped_columns, mapped_rows),
                     (target_columns, target_rows)
                 )
                 
@@ -558,10 +673,10 @@ def main():
     # Snowflake設定
     snowflake_config = {
         'user': 'your_username',
-        'password': 'your_password',
-        'account': 'your_account',
+        'account': 'abc12345.us-east-1',
         'warehouse': 'your_warehouse',
-        'role': 'your_role',
+        'private_key_path': '/path/to/rsa_key.p8',
+        'private_key_passphrase': 'your_passphrase'
     }
     
     # MySQL設定
@@ -577,86 +692,151 @@ def main():
     # 転送オブジェクトを作成
     transfer = DataTransfer(snowflake_config, mysql_config)
     
-    # ========== 例1: 標準転送（TRUNCATE + 自動バックアップ + 検証 + 自動ロールバック） ==========
+    # ========== 例1: カラム名が完全に異なる場合 ==========
     print("\n" + "="*80)
-    print("例1: 標準転送（推奨設定）")
+    print("例1: カラムマッピング - 完全に異なるカラム名")
     print("="*80)
     
+    # Snowflakeのカラム: ORDER_ID, CUSTOMER_NAME, ORDER_DATE, TOTAL_AMOUNT
+    # MySQLのカラム: id, customer, created_at, total
+    column_mapping_1 = {
+        'ORDER_ID': 'id',
+        'CUSTOMER_NAME': 'customer',
+        'ORDER_DATE': 'created_at',
+        'TOTAL_AMOUNT': 'total'
+    }
+    
     result1 = transfer.transfer(
-        source_query='SELECT * FROM MYDB.PUBLIC.ORDERS WHERE status = %s',
-        source_query_params=('COMPLETED',),
+        source_query='SELECT ORDER_ID, CUSTOMER_NAME, ORDER_DATE, TOTAL_AMOUNT FROM MYDB.PUBLIC.ORDERS',
         target_database='mydb',
         target_table='orders',
+        column_mapping=column_mapping_1,
         batch_size=1000,
-        verify=True,                      # データを検証
-        use_backup=True,                  # 自動バックアップ作成（TRUNCATEモードでは強制有効）
-        keep_backup_on_success=False,     # 成功後は自動的にバックアップを削除
-        rollback_on_verify_fail=True      # 検証失敗時に自動ロールバック
+        verify=True
     )
     
     print(f"\n転送結果:")
     print(f"  - 成功: {result1['success']}")
     print(f"  - 転送行数: {result1['rows_transferred']}")
-    print(f"  - バックアップ作成: {result1['backup_created']}")
-    print(f"  - ロールバック実行: {result1['rollback_performed']}")
-    if result1.get('backup_table'):
-        print(f"  - バックアップテーブル: {result1['backup_table']}")
-    if result1['verification']:
-        print(f"  - データ整合性: {result1['verification']['is_consistent']}")
     
-    # ========== 例2: 大量データの高速転送（検証スキップ、ただしバックアップは保持） ==========
+    # ========== 例2: 一部のカラムのみ転送（カラム選択） ==========
     print("\n" + "="*80)
-    print("例2: 高速転送（検証スキップ）")
+    print("例2: 一部カラムのみ転送")
     print("="*80)
+    
+    # Snowflakeに10カラムあるが、MySQLには5カラムのみ転送
+    column_mapping_2 = {
+        'USER_ID': 'user_id',
+        'USER_NAME': 'name',
+        'EMAIL_ADDRESS': 'email',
+        'PHONE_NUMBER': 'phone',
+        'REGISTRATION_DATE': 'registered_at'
+        # 他のカラムは無視される
+    }
     
     result2 = transfer.transfer(
-        source_query='SELECT * FROM MYDB.PUBLIC.BIG_TABLE',
+        source_query='SELECT * FROM MYDB.PUBLIC.USERS',
         target_database='mydb',
-        target_table='big_table',
-        batch_size=5000,
-        verify=False,                     # 検証なし（速度向上）
-        use_backup=True,                  # 依然としてバックアップを作成（安全優先）
-        keep_backup_on_success=False      # 成功後にバックアップを削除（容量節約）
+        target_table='users',
+        column_mapping=column_mapping_2,
+        batch_size=1000,
+        verify=True
     )
     
-    # ========== 例3: バックアップテーブルを保持（手動確認用） ==========
+    # ========== 例3: カラムの順序を変更 ==========
     print("\n" + "="*80)
-    print("例3: 転送後もバックアップテーブルを保持")
+    print("例3: カラムの順序を変更")
     print("="*80)
+    
+    # Snowflake: ID, NAME, AGE, CITY
+    # MySQL: city, age, name, id (順序が異なる)
+    column_mapping_3 = {
+        'ID': 'id',
+        'NAME': 'name',
+        'AGE': 'age',
+        'CITY': 'city'
+    }
     
     result3 = transfer.transfer(
-        source_query='SELECT * FROM MYDB.PUBLIC.IMPORTANT_DATA',
+        source_query='SELECT ID, NAME, AGE, CITY FROM MYDB.PUBLIC.EMPLOYEES',
         target_database='mydb',
-        target_table='important_data',
-        verify=True,
-        use_backup=True,
-        keep_backup_on_success=True,      # 成功してもバックアップテーブルを保持
-        rollback_on_verify_fail=True
+        target_table='employees',
+        column_mapping=column_mapping_3,
+        batch_size=1000,
+        verify=True
     )
     
-    # ========== 例4: 検証失敗時もロールバックしない（新しいデータとバックアップを保持） ==========
+    # ========== 例4: 大文字小文字が異なる ==========
     print("\n" + "="*80)
-    print("例4: 検証失敗時もロールバックしない")
+    print("例4: 大文字小文字の違い")
     print("="*80)
     
+    # Snowflake: PRODUCT_ID, PRODUCT_NAME (大文字)
+    # MySQL: product_id, product_name (小文字)
+    column_mapping_4 = {
+        'PRODUCT_ID': 'product_id',
+        'PRODUCT_NAME': 'product_name',
+        'PRICE': 'price',
+        'STOCK_QUANTITY': 'stock'
+    }
+    
     result4 = transfer.transfer(
-        source_query='SELECT * FROM MYDB.PUBLIC.PRODUCTS',
+        source_query='SELECT PRODUCT_ID, PRODUCT_NAME, PRICE, STOCK_QUANTITY FROM MYDB.PUBLIC.PRODUCTS',
         target_database='mydb',
         target_table='products',
-        verify=True,
-        use_backup=True,
-        keep_backup_on_success=False,
-        rollback_on_verify_fail=False     # 検証失敗時もロールバックしない
+        column_mapping=column_mapping_4,
+        verify=True
     )
     
-    # 検証が失敗しロールバックしなかった場合、バックアップテーブルが保持され、手動復元可能
-    if not result4['success'] and result4.get('backup_table'):
-        print(f"\n⚠ データに問題がある可能性があります、バックアップテーブル: {result4['backup_table']}")
-        print(f"手動復元可能: INSERT INTO mydb.products SELECT * FROM mydb.{result4['backup_table']}")
+    # ========== 例5: カラムマッピングなし（同じカラム名） ==========
+    print("\n" + "="*80)
+    print("例5: カラムマッピングなし（カラム名が同じ場合）")
+    print("="*80)
+    
+    result5 = transfer.transfer(
+        source_query='SELECT id, name, email FROM MYDB.PUBLIC.CUSTOMERS',
+        target_database='mydb',
+        target_table='customers',
+        column_mapping=None,  # マッピングなし
+        verify=True
+    )
+    
+    # ========== 例6: 設定ファイルからマッピングを読み込む ==========
+    print("\n" + "="*80)
+    print("例6: JSONファイルからマッピングを読み込む")
+    print("="*80)
+    
+    # mapping.json ファイルの例:
+    # {
+    #   "ORDER_ID": "id",
+    #   "CUSTOMER_NAME": "customer",
+    #   "ORDER_DATE": "created_at"
+    # }
+    
+    import json
+    
+    # JSONファイルからマッピングを読み込む
+    # with open('mapping.json', 'r', encoding='utf-8') as f:
+    #     column_mapping_from_file = json.load(f)
+    
+    # 例として直接定義
+    column_mapping_from_file = {
+        "ORDER_ID": "id",
+        "CUSTOMER_NAME": "customer",
+        "ORDER_DATE": "created_at",
+        "TOTAL_AMOUNT": "total"
+    }
+    
+    result6 = transfer.transfer(
+        source_query='SELECT ORDER_ID, CUSTOMER_NAME, ORDER_DATE, TOTAL_AMOUNT FROM MYDB.PUBLIC.ORDERS',
+        target_database='mydb',
+        target_table='orders_new',
+        column_mapping=column_mapping_from_file,
+        verify=True
+    )
 
 
 if __name__ == '__main__':
     main()
-
 
 pip install snowflake-connector-python pymysql
