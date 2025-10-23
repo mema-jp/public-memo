@@ -1,0 +1,662 @@
+import snowflake.connector
+import pymysql
+from typing import List, Tuple, Optional
+import logging
+from contextlib import contextmanager
+import hashlib
+import json
+
+# ログ設定
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class DataTransfer:
+    """SnowflakeからMySQLへのデータ転送クラス"""
+    
+    def __init__(self, snowflake_config: dict, mysql_config: dict):
+        """
+        初期化設定
+        
+        :param snowflake_config: Snowflake接続設定
+        :param mysql_config: MySQL接続設定
+        """
+        self.snowflake_config = snowflake_config
+        self.mysql_config = mysql_config
+    
+    @contextmanager
+    def get_snowflake_connection(self):
+        """Snowflake接続のコンテキストマネージャー"""
+        conn = None
+        try:
+            conn = snowflake.connector.connect(**self.snowflake_config)
+            yield conn
+        finally:
+            if conn:
+                conn.close()
+    
+    @contextmanager
+    def get_mysql_connection(self):
+        """MySQL接続のコンテキストマネージャー"""
+        conn = None
+        try:
+            conn = pymysql.connect(**self.mysql_config)
+            yield conn
+        finally:
+            if conn:
+                conn.close()
+    
+    def fetch_data_from_snowflake(self, 
+                                   query: str,
+                                   params: tuple = None) -> Tuple[List, List]:
+        """
+        Snowflakeからデータを取得（カスタムクエリ対応）
+        
+        :param query: SQLクエリ文
+        :param params: クエリパラメータ（オプション）
+        :return: (カラム名リスト, データ行リスト)
+        """
+        with self.get_snowflake_connection() as conn:
+            cursor = conn.cursor()
+            
+            logger.info(f"Snowflakeクエリ実行: {query}")
+            if params:
+                logger.info(f"クエリパラメータ: {params}")
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            # カラム名を取得
+            column_names = [desc[0] for desc in cursor.description]
+            
+            # 全データを取得
+            rows = cursor.fetchall()
+            logger.info(f"Snowflakeから {len(rows)} 行のデータを取得しました")
+            
+            cursor.close()
+            return column_names, rows
+    
+    def fetch_data_from_mysql(self, 
+                             query: str,
+                             params: tuple = None) -> Tuple[List, List]:
+        """
+        MySQLからデータを取得（検証用）
+        
+        :param query: SQLクエリ文
+        :param params: クエリパラメータ（オプション）
+        :return: (カラム名リスト, データ行リスト)
+        """
+        with self.get_mysql_connection() as conn:
+            cursor = conn.cursor()
+            
+            logger.info(f"MySQLクエリ実行: {query}")
+            if params:
+                logger.info(f"クエリパラメータ: {params}")
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            # カラム名を取得
+            column_names = [desc[0] for desc in cursor.description]
+            
+            # 全データを取得
+            rows = cursor.fetchall()
+            logger.info(f"MySQLから {len(rows)} 行のデータを取得しました")
+            
+            cursor.close()
+            return column_names, rows
+    
+    def backup_mysql_table(self, 
+                          database: str, 
+                          table: str,
+                          backup_suffix: str = '_backup') -> str:
+        """
+        MySQLテーブルをバックアップ（ロールバック用）
+        
+        :param database: データベース名
+        :param table: テーブル名
+        :param backup_suffix: バックアップテーブルの接尾辞
+        :return: バックアップテーブル名
+        """
+        backup_table = f"{table}{backup_suffix}"
+        
+        with self.get_mysql_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                # バックアップテーブルが既に存在するか確認
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM information_schema.tables 
+                    WHERE table_schema = '{database}' 
+                    AND table_name = '{backup_table}'
+                """)
+                exists = cursor.fetchone()[0] > 0
+                
+                if exists:
+                    logger.info(f"既存のバックアップテーブルを削除: {database}.{backup_table}")
+                    cursor.execute(f"DROP TABLE {database}.{backup_table}")
+                
+                # バックアップを作成（CREATE TABLE ... AS SELECTが高速）
+                logger.info(f"バックアップテーブルを作成: {database}.{backup_table}")
+                cursor.execute(f"""
+                    CREATE TABLE {database}.{backup_table} 
+                    AS SELECT * FROM {database}.{table}
+                """)
+                
+                conn.commit()
+                
+                # バックアップ行数を取得
+                cursor.execute(f"SELECT COUNT(*) FROM {database}.{backup_table}")
+                backup_count = cursor.fetchone()[0]
+                logger.info(f"✓ {backup_count} 行のデータを {database}.{backup_table} にバックアップしました")
+                
+                cursor.close()
+                return backup_table
+                
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"✗ テーブルのバックアップに失敗: {str(e)}")
+                raise
+    
+    def restore_from_backup(self, 
+                           database: str, 
+                           table: str,
+                           backup_table: str):
+        """
+        バックアップからデータを復元
+        
+        :param database: データベース名
+        :param table: テーブル名
+        :param backup_table: バックアップテーブル名
+        """
+        with self.get_mysql_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                logger.info(f"バックアップテーブル {backup_table} からデータを復元開始...")
+                
+                # ターゲットテーブルをクリア（TRUNCATEを使用）
+                cursor.execute(f"TRUNCATE TABLE {database}.{table}")
+                logger.info(f"✓ テーブル {database}.{table} をクリアしました")
+                
+                # バックアップテーブルからデータを復元
+                cursor.execute(f"""
+                    INSERT INTO {database}.{table} 
+                    SELECT * FROM {database}.{backup_table}
+                """)
+                
+                conn.commit()
+                
+                # 復元された行数を取得
+                cursor.execute(f"SELECT COUNT(*) FROM {database}.{table}")
+                restored_count = cursor.fetchone()[0]
+                logger.info(f"✓ バックアップから {restored_count} 行のデータを復元しました")
+                
+                cursor.close()
+                
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"✗ バックアップからの復元に失敗: {str(e)}")
+                raise
+    
+    def delete_backup_table(self, database: str, backup_table: str):
+        """
+        バックアップテーブルを削除
+        
+        :param database: データベース名
+        :param backup_table: バックアップテーブル名
+        """
+        with self.get_mysql_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                logger.info(f"バックアップテーブルを削除: {database}.{backup_table}")
+                cursor.execute(f"DROP TABLE IF EXISTS {database}.{backup_table}")
+                conn.commit()
+                logger.info(f"✓ バックアップテーブルを削除しました")
+                cursor.close()
+                
+            except Exception as e:
+                logger.warning(f"⚠ バックアップテーブルの削除に失敗: {str(e)}")
+    
+    def truncate_and_insert(self,
+                           database: str,
+                           table: str,
+                           column_names: List[str], 
+                           rows: List,
+                           batch_size: int = 1000):
+        """
+        テーブルをTRUNCATEしてデータを挿入
+        注意: TRUNCATEはロールバック不可、必ず事前にバックアップを作成すること！
+        
+        :param database: データベース名
+        :param table: テーブル名
+        :param column_names: カラム名リスト
+        :param rows: データ行リスト
+        :param batch_size: バッチ挿入のサイズ
+        """
+        if not rows:
+            logger.warning("挿入するデータがありません")
+            return
+        
+        conn = None
+        try:
+            # 接続を取得
+            conn = pymysql.connect(**self.mysql_config)
+            cursor = conn.cursor()
+            
+            # 1. TRUNCATEでテーブルをクリア（注意: この操作はロールバック不可！）
+            logger.info(f"TRUNCATEでテーブルをクリア: {database}.{table}...")
+            cursor.execute(f"TRUNCATE TABLE {database}.{table}")
+            logger.info(f"✓ テーブルデータをクリアしました")
+            
+            # 2. INSERT文を構築
+            cols_str = ', '.join(column_names)
+            placeholders = ', '.join(['%s'] * len(column_names))
+            insert_query = f"INSERT INTO {database}.{table} ({cols_str}) VALUES ({placeholders})"
+            
+            # 3. バッチ挿入（この部分はトランザクション内）
+            conn.begin()
+            logger.info("データのバッチ挿入を開始...")
+            
+            total_inserted = 0
+            for i in range(0, len(rows), batch_size):
+                batch = rows[i:i + batch_size]
+                cursor.executemany(insert_query, batch)
+                total_inserted += len(batch)
+                logger.info(f"挿入済み {total_inserted}/{len(rows)} 行")
+            
+            # 4. 挿入トランザクションをコミット
+            conn.commit()
+            logger.info(f"✓ {database}.{table} に {total_inserted} 行のデータを挿入しました")
+            
+            cursor.close()
+            
+        except Exception as e:
+            # 注意: TRUNCATEは既に実行され、ロールバック不可。INSERT部分のみロールバック可能
+            if conn:
+                conn.rollback()
+                logger.error(f"✗ データ挿入に失敗、INSERT操作をロールバックしました: {str(e)}")
+                logger.error(f"⚠ 警告: テーブルは既にTRUNCATEされています、バックアップから復元が必要です！")
+            raise
+            
+        finally:
+            if conn:
+                conn.close()
+    
+    def calculate_checksum(self, rows: List, column_names: List[str]) -> str:
+        """
+        データのチェックサムを計算
+        
+        :param rows: データ行リスト
+        :param column_names: カラム名リスト
+        :return: MD5チェックサム
+        """
+        # データをソート可能な形式に変換
+        data_list = []
+        for row in rows:
+            # 各行を辞書に変換してソート可能にする
+            row_dict = {column_names[i]: str(row[i]) if row[i] is not None else 'NULL' 
+                       for i in range(len(column_names))}
+            data_list.append(row_dict)
+        
+        # 全カラムでソートして順序を一致させる
+        sorted_data = sorted(data_list, key=lambda x: json.dumps(x, sort_keys=True))
+        
+        # MD5を計算
+        data_str = json.dumps(sorted_data, sort_keys=True)
+        checksum = hashlib.md5(data_str.encode('utf-8')).hexdigest()
+        
+        return checksum
+    
+    def verify_data_consistency(self,
+                               source_data: Tuple[List, List],
+                               target_data: Tuple[List, List],
+                               detailed: bool = True) -> dict:
+        """
+        ソースとターゲットのデータ整合性を検証
+        
+        :param source_data: ソースデータ (カラム名, 行データ)
+        :param target_data: ターゲットデータ (カラム名, 行データ)
+        :param detailed: 詳細比較を行うか
+        :return: 検証結果の辞書
+        """
+        source_columns, source_rows = source_data
+        target_columns, target_rows = target_data
+        
+        result = {
+            'is_consistent': True,
+            'source_row_count': len(source_rows),
+            'target_row_count': len(target_rows),
+            'issues': []
+        }
+        
+        # 1. 行数チェック
+        logger.info(f"ソースデータ行数: {len(source_rows)}, ターゲットデータ行数: {len(target_rows)}")
+        if len(source_rows) != len(target_rows):
+            result['is_consistent'] = False
+            result['issues'].append(f"行数不一致: ソース{len(source_rows)}行, ターゲット{len(target_rows)}行")
+        
+        # 2. カラム名チェック（大文字に変換して比較、Snowflakeはデフォルトで大文字）
+        source_cols_upper = [col.upper() for col in source_columns]
+        target_cols_upper = [col.upper() for col in target_columns]
+        
+        logger.info(f"ソースカラム名: {source_columns}")
+        logger.info(f"ターゲットカラム名: {target_columns}")
+        
+        if source_cols_upper != target_cols_upper:
+            result['is_consistent'] = False
+            result['issues'].append(f"カラム名不一致: ソース{source_columns}, ターゲット{target_columns}")
+        
+        # 3. チェックサム計算
+        if len(source_rows) > 0 and len(target_rows) > 0:
+            source_checksum = self.calculate_checksum(source_rows, source_columns)
+            target_checksum = self.calculate_checksum(target_rows, target_columns)
+            
+            result['source_checksum'] = source_checksum
+            result['target_checksum'] = target_checksum
+            
+            logger.info(f"ソースデータチェックサム: {source_checksum}")
+            logger.info(f"ターゲットデータチェックサム: {target_checksum}")
+            
+            if source_checksum != target_checksum:
+                result['is_consistent'] = False
+                result['issues'].append("データ内容のチェックサムが不一致")
+                
+                # 詳細比較が必要な場合
+                if detailed and len(source_rows) == len(target_rows):
+                    logger.info("詳細なデータ比較を実行中...")
+                    diff_count = 0
+                    for i, (src_row, tgt_row) in enumerate(zip(source_rows, target_rows)):
+                        if src_row != tgt_row:
+                            diff_count += 1
+                            if diff_count <= 5:  # 最初の5件の差異のみ表示
+                                result['issues'].append(
+                                    f"第{i+1}行のデータが不一致:\n  ソース: {src_row}\n  ターゲット: {tgt_row}"
+                                )
+                    
+                    if diff_count > 5:
+                        result['issues'].append(f"...他に{diff_count - 5}行のデータが不一致")
+        
+        return result
+    
+    def transfer(self,
+                source_query: str,
+                target_database: str,
+                target_table: str,
+                source_query_params: tuple = None,
+                batch_size: int = 1000,
+                verify: bool = True,
+                verify_query: Optional[str] = None,
+                use_backup: bool = True,
+                keep_backup_on_success: bool = False,
+                rollback_on_verify_fail: bool = True) -> dict:
+        """
+        完全なデータ転送フローを実行（TRUNCATE + バックアップ保護）
+        
+        重要: TRUNCATEはロールバック不可のため、本メソッドはバックアップ作成を強制します！
+        
+        :param source_query: ソースデータクエリSQL（Snowflake）
+        :param target_database: ターゲットデータベース（MySQL）
+        :param target_table: ターゲットテーブル名（MySQL）
+        :param source_query_params: ソースクエリパラメータ
+        :param batch_size: バッチ挿入サイズ
+        :param verify: データ整合性を検証するか
+        :param verify_query: カスタム検証クエリ
+        :param use_backup: バックアップを使用するか（TRUNCATEではTrue推奨）
+        :param keep_backup_on_success: 成功時にバックアップテーブルを保持するか
+        :param rollback_on_verify_fail: 検証失敗時にロールバックするか
+        :return: 転送結果と検証結果を含む辞書
+        """
+        transfer_result = {
+            'success': False,
+            'rows_transferred': 0,
+            'verification': None,
+            'backup_created': False,
+            'rollback_performed': False
+        }
+        
+        backup_table = None
+        
+        try:
+            logger.info("=" * 80)
+            logger.info(f"{target_database}.{target_table} へのデータ転送を開始")
+            logger.info(f"転送モード: TRUNCATE（ロールバック不可） + バックアップ保護")
+            logger.info("=" * 80)
+            
+            # 安全性チェック: TRUNCATEを使用する場合、バックアップは必須
+            if not use_backup:
+                logger.warning("⚠ 警告: TRUNCATEはロールバック不可、バックアップ保護を強制的に有効化します！")
+                use_backup = True
+            
+            # 1. Snowflakeからデータを取得
+            logger.info("ステップ1: Snowflakeからデータを取得...")
+            column_names, source_rows = self.fetch_data_from_snowflake(
+                source_query, source_query_params
+            )
+            
+            if not source_rows:
+                logger.warning("ソースクエリがデータを返しませんでした、転送をスキップします")
+                return transfer_result
+            
+            # 2. バックアップを作成（TRUNCATEを使用する場合は必須！）
+            logger.info("ステップ2: データをバックアップ...")
+            backup_table = self.backup_mysql_table(target_database, target_table)
+            transfer_result['backup_created'] = True
+            transfer_result['backup_table'] = backup_table
+            
+            # 3. TRUNCATEしてデータを挿入
+            logger.info("ステップ3: テーブルをTRUNCATEしてデータを挿入...")
+            self.truncate_and_insert(
+                target_database, target_table, column_names, source_rows, batch_size
+            )
+            
+            transfer_result['success'] = True
+            transfer_result['rows_transferred'] = len(source_rows)
+            
+            # 4. データ整合性検証
+            if verify:
+                logger.info("=" * 80)
+                logger.info("ステップ4: データ整合性を検証...")
+                logger.info("=" * 80)
+                
+                # ターゲットクエリを構築
+                if verify_query is None:
+                    cols_str = ', '.join(column_names)
+                    verify_query = f"SELECT {cols_str} FROM {target_database}.{target_table}"
+                
+                # ターゲットデータを取得
+                target_columns, target_rows = self.fetch_data_from_mysql(verify_query)
+                
+                # 検証を実行
+                verification_result = self.verify_data_consistency(
+                    (column_names, source_rows),
+                    (target_columns, target_rows)
+                )
+                
+                transfer_result['verification'] = verification_result
+                
+                # 検証結果を出力
+                logger.info("=" * 80)
+                if verification_result['is_consistent']:
+                    logger.info("✓ データ整合性検証が成功しました！")
+                    
+                    # 検証成功、設定に応じてバックアップテーブルを削除
+                    if not keep_backup_on_success:
+                        self.delete_backup_table(target_database, backup_table)
+                    else:
+                        logger.info(f"ℹ バックアップテーブルを保持: {target_database}.{backup_table}")
+                        
+                else:
+                    logger.error("✗ データ整合性検証が失敗しました！")
+                    for issue in verification_result['issues']:
+                        logger.error(f"  - {issue}")
+                    
+                    # 検証失敗、ロールバックするか
+                    if rollback_on_verify_fail:
+                        logger.warning("=" * 80)
+                        logger.warning("検証失敗、ロールバックを実行...")
+                        logger.warning("=" * 80)
+                        
+                        self.restore_from_backup(target_database, target_table, backup_table)
+                        transfer_result['rollback_performed'] = True
+                        transfer_result['success'] = False
+                        
+                        logger.info("✓ 元のデータにロールバックしました")
+                        
+                        # ロールバック後、検査用にバックアップテーブルを保持
+                        logger.info(f"ℹ 検査用にバックアップテーブルを保持: {target_database}.{backup_table}")
+                    else:
+                        logger.warning("検証は失敗しましたがロールバックは無効、データは現在の状態を維持します")
+                        logger.info(f"ℹ 復元用にバックアップテーブルを保持: {target_database}.{backup_table}")
+                        
+                logger.info("=" * 80)
+            else:
+                # 検証なし、設定に応じてバックアップテーブルを削除
+                if not keep_backup_on_success:
+                    self.delete_backup_table(target_database, backup_table)
+                else:
+                    logger.info(f"ℹ バックアップテーブルを保持: {target_database}.{backup_table}")
+            
+            logger.info("=" * 80)
+            logger.info("データ転送フローが完了しました！")
+            logger.info("=" * 80)
+            
+        except Exception as e:
+            logger.error(f"✗ データ転送中にエラーが発生しました: {str(e)}", exc_info=True)
+            transfer_result['error'] = str(e)
+            
+            # 例外発生、バックアップからロールバック
+            if backup_table:
+                try:
+                    logger.warning("=" * 80)
+                    logger.warning("例外発生、バックアップからのロールバックを試行...")
+                    logger.warning("=" * 80)
+                    
+                    self.restore_from_backup(target_database, target_table, backup_table)
+                    transfer_result['rollback_performed'] = True
+                    
+                    logger.info("✓ 元のデータにロールバックしました")
+                    logger.info(f"ℹ 検査用にバックアップテーブルを保持: {target_database}.{backup_table}")
+                    
+                except Exception as rollback_error:
+                    logger.error(f"✗ ロールバックに失敗: {str(rollback_error)}")
+                    transfer_result['rollback_error'] = str(rollback_error)
+                    logger.error(f"⚠ 緊急: 元のデータはバックアップテーブル {target_database}.{backup_table} にあります！")
+            
+            raise
+        
+        return transfer_result
+
+
+def main():
+    """メイン関数の例"""
+    
+    # Snowflake設定
+    snowflake_config = {
+        'user': 'your_username',
+        'password': 'your_password',
+        'account': 'your_account',
+        'warehouse': 'your_warehouse',
+        'role': 'your_role',
+    }
+    
+    # MySQL設定
+    mysql_config = {
+        'host': 'localhost',
+        'port': 3306,
+        'user': 'your_username',
+        'password': 'your_password',
+        'charset': 'utf8mb4',
+        'autocommit': False
+    }
+    
+    # 転送オブジェクトを作成
+    transfer = DataTransfer(snowflake_config, mysql_config)
+    
+    # ========== 例1: 標準転送（TRUNCATE + 自動バックアップ + 検証 + 自動ロールバック） ==========
+    print("\n" + "="*80)
+    print("例1: 標準転送（推奨設定）")
+    print("="*80)
+    
+    result1 = transfer.transfer(
+        source_query='SELECT * FROM MYDB.PUBLIC.ORDERS WHERE status = %s',
+        source_query_params=('COMPLETED',),
+        target_database='mydb',
+        target_table='orders',
+        batch_size=1000,
+        verify=True,                      # データを検証
+        use_backup=True,                  # 自動バックアップ作成（TRUNCATEモードでは強制有効）
+        keep_backup_on_success=False,     # 成功後は自動的にバックアップを削除
+        rollback_on_verify_fail=True      # 検証失敗時に自動ロールバック
+    )
+    
+    print(f"\n転送結果:")
+    print(f"  - 成功: {result1['success']}")
+    print(f"  - 転送行数: {result1['rows_transferred']}")
+    print(f"  - バックアップ作成: {result1['backup_created']}")
+    print(f"  - ロールバック実行: {result1['rollback_performed']}")
+    if result1.get('backup_table'):
+        print(f"  - バックアップテーブル: {result1['backup_table']}")
+    if result1['verification']:
+        print(f"  - データ整合性: {result1['verification']['is_consistent']}")
+    
+    # ========== 例2: 大量データの高速転送（検証スキップ、ただしバックアップは保持） ==========
+    print("\n" + "="*80)
+    print("例2: 高速転送（検証スキップ）")
+    print("="*80)
+    
+    result2 = transfer.transfer(
+        source_query='SELECT * FROM MYDB.PUBLIC.BIG_TABLE',
+        target_database='mydb',
+        target_table='big_table',
+        batch_size=5000,
+        verify=False,                     # 検証なし（速度向上）
+        use_backup=True,                  # 依然としてバックアップを作成（安全優先）
+        keep_backup_on_success=False      # 成功後にバックアップを削除（容量節約）
+    )
+    
+    # ========== 例3: バックアップテーブルを保持（手動確認用） ==========
+    print("\n" + "="*80)
+    print("例3: 転送後もバックアップテーブルを保持")
+    print("="*80)
+    
+    result3 = transfer.transfer(
+        source_query='SELECT * FROM MYDB.PUBLIC.IMPORTANT_DATA',
+        target_database='mydb',
+        target_table='important_data',
+        verify=True,
+        use_backup=True,
+        keep_backup_on_success=True,      # 成功してもバックアップテーブルを保持
+        rollback_on_verify_fail=True
+    )
+    
+    # ========== 例4: 検証失敗時もロールバックしない（新しいデータとバックアップを保持） ==========
+    print("\n" + "="*80)
+    print("例4: 検証失敗時もロールバックしない")
+    print("="*80)
+    
+    result4 = transfer.transfer(
+        source_query='SELECT * FROM MYDB.PUBLIC.PRODUCTS',
+        target_database='mydb',
+        target_table='products',
+        verify=True,
+        use_backup=True,
+        keep_backup_on_success=False,
+        rollback_on_verify_fail=False     # 検証失敗時もロールバックしない
+    )
+    
+    # 検証が失敗しロールバックしなかった場合、バックアップテーブルが保持され、手動復元可能
+    if not result4['success'] and result4.get('backup_table'):
+        print(f"\n⚠ データに問題がある可能性があります、バックアップテーブル: {result4['backup_table']}")
+        print(f"手動復元可能: INSERT INTO mydb.products SELECT * FROM mydb.{result4['backup_table']}")
+
+
+if __name__ == '__main__':
+    main()
+
+
+pip install snowflake-connector-python pymysql
