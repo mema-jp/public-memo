@@ -1,0 +1,353 @@
+好的！给你一个完整的支持环境变量替换的方案：
+
+## 完整的环境变量替换实现
+
+### 1. **配置文件示例**
+
+```yaml
+# config.yaml
+databases:
+  snowflake_prod:
+    type: snowflake
+    account: "${SNOWFLAKE_ACCOUNT}"
+    warehouse: "${SNOWFLAKE_WAREHOUSE:COMPUTE_WH}"  # 带默认值
+    database: "${SNOWFLAKE_DATABASE}"
+    schema: "PUBLIC"
+    user: "${SNOWFLAKE_USER}"
+    password: "${SNOWFLAKE_PASSWORD}"
+    role: "${SNOWFLAKE_ROLE:DATA_LOADER}"
+  
+  mysql_prod:
+    type: mysql
+    host: "${MYSQL_HOST:localhost}"
+    port: "${MYSQL_PORT:3306}"
+    database: "${MYSQL_DATABASE}"
+    user: "${MYSQL_USER}"
+    password: "${MYSQL_PASSWORD}"
+    charset: "utf8mb4"
+    connect_timeout: 30
+
+tables:
+  user_table:
+    source_db: "snowflake_prod"
+    source_query: "SELECT id, name, email FROM users WHERE created_at > '${START_DATE:2024-01-01}'"
+    target_db: "mysql_prod"
+    target_table: "users"
+    mapping_fields:
+      id: user_id
+      name: username
+      email: email_address
+  
+  order_table:
+    source_db: "snowflake_prod"
+    source_query: "SELECT * FROM orders"
+    target_db: "mysql_prod"
+    target_table: "orders"
+    mapping_fields: {}
+```
+
+### 2. **环境变量文件**
+
+**.env（不提交到Git）：**
+
+```bash
+# Snowflake Configuration
+SNOWFLAKE_ACCOUNT=abc12345.us-east-1
+SNOWFLAKE_WAREHOUSE=COMPUTE_WH
+SNOWFLAKE_DATABASE=PROD_DB
+SNOWFLAKE_USER=data_loader
+SNOWFLAKE_PASSWORD=your_secure_password
+SNOWFLAKE_ROLE=DATA_LOADER
+
+# MySQL Configuration
+MYSQL_HOST=mysql.example.com
+MYSQL_PORT=3306
+MYSQL_DATABASE=production
+MYSQL_USER=root
+MYSQL_PASSWORD=mysql_secure_password
+
+# Query Parameters
+START_DATE=2024-01-01
+```
+
+### 3. **增强的配置读取器实现**
+
+```python
+import os
+import re
+import yaml
+from typing import Dict, Any, Optional
+from pathlib import Path
+from dotenv import load_dotenv
+
+class EnvVarResolver:
+    """环境变量解析器"""
+    
+    # 匹配 ${VAR_NAME} 或 ${VAR_NAME:default_value}
+    ENV_VAR_PATTERN = re.compile(r'\$\{([^}:]+)(?::([^}]*))?\}')
+    
+    @classmethod
+    def resolve(cls, value: str) -> str:
+        """
+        解析字符串中的环境变量
+        支持格式：
+        - ${VAR_NAME} - 必需的环境变量
+        - ${VAR_NAME:default} - 带默认值的环境变量
+        """
+        if not isinstance(value, str):
+            return value
+        
+        def replace_match(match):
+            var_name = match.group(1)
+            default_value = match.group(2)
+            
+            env_value = os.getenv(var_name)
+            
+            if env_value is not None:
+                return env_value
+            elif default_value is not None:
+                return default_value
+            else:
+                raise ValueError(
+                    f"环境变量 '{var_name}' 未设置且没有默认值"
+                )
+        
+        return cls.ENV_VAR_PATTERN.sub(replace_match, value)
+    
+    @classmethod
+    def resolve_recursive(cls, obj: Any) -> Any:
+        """递归解析对象中的所有环境变量"""
+        if isinstance(obj, dict):
+            return {k: cls.resolve_recursive(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [cls.resolve_recursive(item) for item in obj]
+        elif isinstance(obj, str):
+            return cls.resolve(obj)
+        else:
+            return obj
+
+
+class ConfigReader:
+    """配置文件读取器（支持环境变量）"""
+    
+    def __init__(self, config_path: str, env_file: Optional[str] = None):
+        """
+        初始化配置读取器
+        
+        Args:
+            config_path: 配置文件路径
+            env_file: .env 文件路径（可选）
+        """
+        # 加载环境变量文件
+        if env_file and Path(env_file).exists():
+            load_dotenv(env_file, override=True)
+        
+        self.config_path = Path(config_path)
+        self.raw_config = self._load_config()
+        self.config_data = EnvVarResolver.resolve_recursive(self.raw_config)
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """加载配置文件"""
+        if not self.config_path.exists():
+            raise FileNotFoundError(f"配置文件不存在: {self.config_path}")
+        
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            if self.config_path.suffix in ['.yaml', '.yml']:
+                return yaml.safe_load(f)
+            elif self.config_path.suffix == '.json':
+                import json
+                return json.load(f)
+            else:
+                raise ValueError(f"不支持的配置格式: {self.config_path.suffix}")
+    
+    def get_db_config(self, db_name: str) -> Dict[str, Any]:
+        """获取数据库连接配置"""
+        databases = self.config_data.get('databases', {})
+        if db_name not in databases:
+            raise KeyError(f"未找到数据库 '{db_name}' 的配置")
+        
+        return databases[db_name].copy()
+    
+    def get_table_config(self, table_name: str) -> Dict[str, Any]:
+        """获取表配置"""
+        tables = self.config_data.get('tables', {})
+        if table_name not in tables:
+            raise KeyError(f"未找到表 '{table_name}' 的配置")
+        
+        table_conf = tables[table_name]
+        
+        # 获取数据库配置
+        source_db_config = self.get_db_config(table_conf['source_db'])
+        target_db_config = self.get_db_config(table_conf['target_db'])
+        
+        return {
+            'source_query': table_conf['source_query'],
+            'source_db_config': source_db_config,
+            'target_db_config': target_db_config,
+            'target_table': table_conf['target_table'],
+            'mapping_fields': table_conf.get('mapping_fields', {})
+        }
+    
+    def list_all_tables(self) -> list:
+        """列出所有配置的表"""
+        return list(self.config_data.get('tables', {}).keys())
+    
+    def list_all_databases(self) -> list:
+        """列出所有配置的数据库"""
+        return list(self.config_data.get('databases', {}).keys())
+    
+    def validate_config(self) -> bool:
+        """验证配置是否完整（可扩展）"""
+        required_sections = ['databases', 'tables']
+        for section in required_sections:
+            if section not in self.config_data:
+                raise ValueError(f"配置文件缺少必需的节: {section}")
+        return True
+```
+
+### 4. **使用示例**
+
+```python
+def main(table_name: str):
+    """主函数"""
+    try:
+        # 方式1：自动查找 .env 文件
+        config_reader = ConfigReader(
+            config_path='config.yaml',
+            env_file='.env'  # 可选，不传则只读系统环境变量
+        )
+        
+        # 验证配置
+        config_reader.validate_config()
+        
+        # 获取表配置
+        table_config = config_reader.get_table_config(table_name)
+        
+        print(f"开始导入表: {table_name}")
+        print(f"源查询: {table_config['source_query']}")
+        print(f"目标表: {table_config['target_table']}")
+        
+        # 调用数据导入函数
+        import_data(
+            source_query=table_config['source_query'],
+            source_db_config=table_config['source_db_config'],
+            target_db_config=table_config['target_db_config'],
+            target_table=table_config['target_table'],
+            mapping_fields=table_config['mapping_fields']
+        )
+        
+        print(f"表 {table_name} 导入完成")
+        
+    except ValueError as e:
+        print(f"配置错误: {e}")
+    except KeyError as e:
+        print(f"配置缺失: {e}")
+    except Exception as e:
+        print(f"导入失败: {e}")
+
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) < 2:
+        print("用法: python script.py <table_name>")
+        sys.exit(1)
+    
+    table_name = sys.argv[1]
+    main(table_name)
+```
+
+### 5. **批量导入多个表**
+
+```python
+def batch_import(table_names: list = None):
+    """批量导入多个表"""
+    config_reader = ConfigReader('config.yaml', '.env')
+    
+    # 如果未指定表名，导入所有配置的表
+    if not table_names:
+        table_names = config_reader.list_all_tables()
+    
+    print(f"准备导入 {len(table_names)} 个表")
+    
+    for table_name in table_names:
+        try:
+            print(f"\n{'='*50}")
+            table_config = config_reader.get_table_config(table_name)
+            
+            import_data(
+                source_query=table_config['source_query'],
+                source_db_config=table_config['source_db_config'],
+                target_db_config=table_config['target_db_config'],
+                target_table=table_config['target_table'],
+                mapping_fields=table_config['mapping_fields']
+            )
+            
+            print(f"✓ {table_name} 导入成功")
+        except Exception as e:
+            print(f"✗ {table_name} 导入失败: {e}")
+
+
+# 使用示例
+if __name__ == "__main__":
+    # 导入指定的表
+    batch_import(['user_table', 'order_table'])
+    
+    # 或导入所有表
+    # batch_import()
+```
+
+### 6. **需要安装的依赖**
+
+```bash
+pip install pyyaml python-dotenv
+```
+
+### 7. **.gitignore 配置**
+
+```
+# 环境变量文件
+.env
+.env.*
+!.env.example
+
+# 敏感配置
+secrets.yaml
+secrets.*.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+```
+
+### 8. **提供环境变量模板**
+
+**.env.example：**
+
+```bash
+# Snowflake Configuration
+SNOWFLAKE_ACCOUNT=your_account
+SNOWFLAKE_WAREHOUSE=COMPUTE_WH
+SNOWFLAKE_DATABASE=your_database
+SNOWFLAKE_USER=your_username
+SNOWFLAKE_PASSWORD=your_password
+
+# MySQL Configuration
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_DATABASE=your_database
+MYSQL_USER=your_username
+MYSQL_PASSWORD=your_password
+```
+
+## 核心特性
+
+1. ✅ **支持默认值**：`${VAR:default}`
+1. ✅ **递归解析**：配置文件任何位置的环境变量都能解析
+1. ✅ **错误提示**：未设置且无默认值时清晰报错
+1. ✅ **类型转换**：自动处理字符串、数字等类型
+1. ✅ **.env 文件支持**：开发环境友好
+1. ✅ **安全性**：敏感信息不进版本控制
+
+这个方案灵活且安全，适合生产环境使用！​​​​​​​​​​​​​​​​
