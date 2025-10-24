@@ -351,3 +351,357 @@ MYSQL_PASSWORD=your_password
 1. ✅ **安全性**：敏感信息不进版本控制
 
 这个方案灵活且安全，适合生产环境使用！​​​​​​​​​​​​​​​​
+
+
+可以！我给你几种方案来处理类型转换：
+
+## 方案1：自动类型推断（推荐）
+
+```python
+import os
+import re
+import yaml
+from typing import Dict, Any, Optional, Union
+from pathlib import Path
+from dotenv import load_dotenv
+
+class EnvVarResolver:
+    """环境变量解析器（支持类型转换）"""
+    
+    ENV_VAR_PATTERN = re.compile(r'\$\{([^}:]+)(?::([^}]*))?\}')
+    
+    @classmethod
+    def auto_cast(cls, value: str) -> Union[str, int, float, bool]:
+        """
+        自动类型转换
+        - 'true'/'false' -> bool
+        - 纯数字 -> int
+        - 浮点数 -> float
+        - 其他 -> str
+        """
+        if not isinstance(value, str):
+            return value
+        
+        # 去除首尾空格
+        value = value.strip()
+        
+        # 布尔值
+        if value.lower() in ('true', 'yes', 'on', '1'):
+            return True
+        if value.lower() in ('false', 'no', 'off', '0'):
+            return False
+        
+        # 整数
+        if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
+            return int(value)
+        
+        # 浮点数
+        try:
+            if '.' in value:
+                return float(value)
+        except ValueError:
+            pass
+        
+        # 其他情况返回字符串
+        return value
+    
+    @classmethod
+    def resolve(cls, value: str, auto_type_cast: bool = True) -> Any:
+        """
+        解析字符串中的环境变量
+        
+        Args:
+            value: 要解析的值
+            auto_type_cast: 是否自动进行类型转换
+        """
+        if not isinstance(value, str):
+            return value
+        
+        def replace_match(match):
+            var_name = match.group(1)
+            default_value = match.group(2)
+            
+            env_value = os.getenv(var_name)
+            
+            if env_value is not None:
+                result = env_value
+            elif default_value is not None:
+                result = default_value
+            else:
+                raise ValueError(
+                    f"环境变量 '{var_name}' 未设置且没有默认值"
+                )
+            
+            # 自动类型转换
+            if auto_type_cast:
+                return cls.auto_cast(result)
+            return result
+        
+        # 如果整个字符串就是一个环境变量，直接返回转换后的类型
+        match = cls.ENV_VAR_PATTERN.fullmatch(value)
+        if match:
+            return replace_match(match)
+        
+        # 如果是字符串中包含环境变量，替换后返回字符串
+        return cls.ENV_VAR_PATTERN.sub(
+            lambda m: str(replace_match(m)), 
+            value
+        )
+    
+    @classmethod
+    def resolve_recursive(cls, obj: Any, auto_type_cast: bool = True) -> Any:
+        """递归解析对象中的所有环境变量"""
+        if isinstance(obj, dict):
+            return {
+                k: cls.resolve_recursive(v, auto_type_cast) 
+                for k, v in obj.items()
+            }
+        elif isinstance(obj, list):
+            return [
+                cls.resolve_recursive(item, auto_type_cast) 
+                for item in obj
+            ]
+        elif isinstance(obj, str):
+            return cls.resolve(obj, auto_type_cast)
+        else:
+            return obj
+
+
+class ConfigReader:
+    """配置文件读取器（支持类型转换）"""
+    
+    def __init__(
+        self, 
+        config_path: str, 
+        env_file: Optional[str] = None,
+        auto_type_cast: bool = True
+    ):
+        """
+        初始化配置读取器
+        
+        Args:
+            config_path: 配置文件路径
+            env_file: .env 文件路径（可选）
+            auto_type_cast: 是否自动进行类型转换（默认True）
+        """
+        if env_file and Path(env_file).exists():
+            load_dotenv(env_file, override=True)
+        
+        self.config_path = Path(config_path)
+        self.auto_type_cast = auto_type_cast
+        self.raw_config = self._load_config()
+        self.config_data = EnvVarResolver.resolve_recursive(
+            self.raw_config, 
+            auto_type_cast=self.auto_type_cast
+        )
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """加载配置文件"""
+        if not self.config_path.exists():
+            raise FileNotFoundError(f"配置文件不存在: {self.config_path}")
+        
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            if self.config_path.suffix in ['.yaml', '.yml']:
+                return yaml.safe_load(f)
+            elif self.config_path.suffix == '.json':
+                import json
+                return json.load(f)
+            else:
+                raise ValueError(f"不支持的配置格式: {self.config_path.suffix}")
+    
+    def get_db_config(self, db_name: str) -> Dict[str, Any]:
+        """获取数据库连接配置"""
+        databases = self.config_data.get('databases', {})
+        if db_name not in databases:
+            raise KeyError(f"未找到数据库 '{db_name}' 的配置")
+        
+        return databases[db_name].copy()
+    
+    def get_table_config(self, table_name: str) -> Dict[str, Any]:
+        """获取表配置"""
+        tables = self.config_data.get('tables', {})
+        if table_name not in tables:
+            raise KeyError(f"未找到表 '{table_name}' 的配置")
+        
+        table_conf = tables[table_name]
+        
+        source_db_config = self.get_db_config(table_conf['source_db'])
+        target_db_config = self.get_db_config(table_conf['target_db'])
+        
+        return {
+            'source_query': table_conf['source_query'],
+            'source_db_config': source_db_config,
+            'target_db_config': target_db_config,
+            'target_table': table_conf['target_table'],
+            'mapping_fields': table_conf.get('mapping_fields', {})
+        }
+```
+
+## 方案2：显式类型声明
+
+如果你想更精确地控制类型，可以在配置中添加类型声明：
+
+```yaml
+# config.yaml
+databases:
+  mysql_prod:
+    type: mysql
+    host: "${MYSQL_HOST:localhost}"
+    port: "${MYSQL_PORT:3306|int}"  # 显式声明为int类型
+    database: "${MYSQL_DATABASE}"
+    connect_timeout: "${TIMEOUT:30|int}"
+    max_connections: "${MAX_CONN:100|int}"
+    enable_ssl: "${ENABLE_SSL:true|bool}"
+    retry_limit: "${RETRY:3|int}"
+```
+
+**对应的解析器：**
+
+```python
+class EnvVarResolver:
+    """环境变量解析器（支持显式类型声明）"""
+    
+    # 匹配 ${VAR:default|type}
+    ENV_VAR_PATTERN = re.compile(r'\$\{([^}:|]+)(?::([^}|]*))?(?:\|(\w+))?\}')
+    
+    TYPE_CONVERTERS = {
+        'int': int,
+        'float': float,
+        'bool': lambda x: x.lower() in ('true', 'yes', 'on', '1'),
+        'str': str,
+    }
+    
+    @classmethod
+    def resolve(cls, value: str) -> Any:
+        """解析环境变量（支持类型声明）"""
+        if not isinstance(value, str):
+            return value
+        
+        def replace_match(match):
+            var_name = match.group(1)
+            default_value = match.group(2)
+            type_hint = match.group(3)  # 类型提示
+            
+            env_value = os.getenv(var_name)
+            
+            if env_value is not None:
+                result = env_value
+            elif default_value is not None:
+                result = default_value
+            else:
+                raise ValueError(
+                    f"环境变量 '{var_name}' 未设置且没有默认值"
+                )
+            
+            # 根据类型提示转换
+            if type_hint and type_hint in cls.TYPE_CONVERTERS:
+                try:
+                    return cls.TYPE_CONVERTERS[type_hint](result)
+                except (ValueError, TypeError) as e:
+                    raise ValueError(
+                        f"无法将 '{result}' 转换为 {type_hint} 类型: {e}"
+                    )
+            
+            # 自动推断类型
+            return cls.auto_cast(result)
+        
+        match = cls.ENV_VAR_PATTERN.fullmatch(value)
+        if match:
+            return replace_match(match)
+        
+        return cls.ENV_VAR_PATTERN.sub(
+            lambda m: str(replace_match(m)), 
+            value
+        )
+    
+    @classmethod
+    def auto_cast(cls, value: str) -> Union[str, int, float, bool]:
+        """自动类型转换（同上）"""
+        if not isinstance(value, str):
+            return value
+        
+        value = value.strip()
+        
+        if value.lower() in ('true', 'yes', 'on', '1'):
+            return True
+        if value.lower() in ('false', 'no', 'off', '0'):
+            return False
+        
+        if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
+            return int(value)
+        
+        try:
+            if '.' in value:
+                return float(value)
+        except ValueError:
+            pass
+        
+        return value
+```
+
+## 使用示例
+
+```python
+# .env 文件
+MYSQL_PORT=3306
+MYSQL_TIMEOUT=30
+MAX_CONNECTIONS=100
+ENABLE_SSL=true
+
+# 测试代码
+config_reader = ConfigReader('config.yaml', '.env')
+db_config = config_reader.get_db_config('mysql_prod')
+
+print(db_config['port'])  # 输出: 3306 (int类型)
+print(type(db_config['port']))  # 输出: <class 'int'>
+
+print(db_config['connect_timeout'])  # 输出: 30 (int类型)
+print(db_config['enable_ssl'])  # 输出: True (bool类型)
+```
+
+## 完整的配置示例
+
+```yaml
+databases:
+  mysql_prod:
+    type: mysql
+    host: "${MYSQL_HOST:localhost}"
+    port: "${MYSQL_PORT:3306}"  # 自动转为int
+    database: "${MYSQL_DATABASE}"
+    user: "${MYSQL_USER}"
+    password: "${MYSQL_PASSWORD}"
+    charset: "utf8mb4"
+    connect_timeout: "${CONNECT_TIMEOUT:30}"  # 自动转为int
+    max_connections: "${MAX_CONN:100}"  # 自动转为int
+    enable_ssl: "${ENABLE_SSL:false}"  # 自动转为bool
+    pool_size: "${POOL_SIZE:10}"  # 自动转为int
+    
+  snowflake_prod:
+    type: snowflake
+    account: "${SNOWFLAKE_ACCOUNT}"
+    warehouse: "${SNOWFLAKE_WAREHOUSE}"
+    database: "${SNOWFLAKE_DATABASE}"
+    user: "${SNOWFLAKE_USER}"
+    password: "${SNOWFLAKE_PASSWORD}"
+    session_timeout: "${SF_TIMEOUT:3600}"  # 自动转为int
+
+tables:
+  user_table:
+    source_db: "snowflake_prod"
+    source_query: "SELECT * FROM users LIMIT ${LIMIT:1000}"  # 自动转为int
+    target_db: "mysql_prod"
+    target_table: "users"
+    batch_size: "${BATCH_SIZE:5000}"  # 自动转为int
+    enable_validation: "${ENABLE_VALIDATION:true}"  # 自动转为bool
+```
+
+**类型转换规则总结：**
+
+1. ✅ 纯数字字符串 → `int`
+1. ✅ 包含小数点的数字 → `float`
+1. ✅ `true/false/yes/no/on/off/1/0` → `bool`
+1. ✅ 其他 → `str`
+1. ✅ 支持负数
+1. ✅ 支持显式类型声明（可选）
+
+这样配置文件中的数字就会自动转换为正确的类型了！​​​​​​​​​​​​​​​​
