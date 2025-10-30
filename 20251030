@@ -1,0 +1,25 @@
+#!/bin/bash
+# 密钥部署脚本
+
+KEY_DIR="/etc/secure/keys"
+KEY_FILE="$KEY_DIR/encryption.key"
+
+# 创建目录
+sudo mkdir -p $KEY_DIR
+
+# 生成密钥
+sudo bash -c "openssl rand -hex 32 > $KEY_FILE"
+
+# 设置所有者和权限
+sudo chown root:root $KEY_FILE
+sudo chmod 400 $KEY_FILE  # 只读
+
+# 如果需要应用访问,创建软链接
+sudo ln -sf $KEY_FILE /opt/myapp/config/encryption.key
+
+# 验证
+echo "密钥文件信息:"
+sudo ls -l $KEY_FILE
+echo "密钥内容(前10个字符):"
+sudo head -c 10 $KEY_FILE
+echo "..."
