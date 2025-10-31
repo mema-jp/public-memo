@@ -1,0 +1,17 @@
+#!/bin/bash
+# 删除日志文件(保留最近7天)
+
+LOG_DIR="/var/log/myapp"
+DAYS=7
+
+echo "正在查找 $DAYS 天前的文件..."
+find "$LOG_DIR" -name "*.log" -type f -mtime +$DAYS
+
+read -p "确认删除以上文件? (y/n) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    find "$LOG_DIR" -name "*.log" -type f -mtime +$DAYS -delete
+    echo "删除完成"
+else
+    echo "操作已取消"
+fi
