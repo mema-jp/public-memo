@@ -15,3 +15,43 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 else
     echo "操作已取消"
 fi
+
+
+
+
+
+#!/bin/bash
+
+SOURCE_DIR="/path/to/your/folder"
+S3_BUCKET="s3://your-bucket-name"
+DAYS_OLD=30
+LOG_FILE="/var/log/s3_upload.log"
+ACTION="move"  # 可选: "move" 或 "delete" 或 "none"
+ARCHIVE_DIR="/path/to/archive"  # 如果ACTION是move,指定归档目录
+
+# ... (前面的检查代码相同) ...
+
+find "$SOURCE_DIR" -type f -mtime +$DAYS_OLD | while read -r file; do
+    relative_path="${file#$SOURCE_DIR/}"
+    
+    echo "正在上传: $relative_path" | tee -a "$LOG_FILE"
+    
+    if aws s3 cp "$file" "$S3_BUCKET/$relative_path"; then
+        echo "✓ 上传成功: $relative_path" | tee -a "$LOG_FILE"
+        
+        # 上传成功后的处理
+        if [ "$ACTION" = "delete" ]; then
+            rm -f "$file"
+            echo "  已删除本地文件" | tee -a "$LOG_FILE"
+        elif [ "$ACTION" = "move" ]; then
+            mkdir -p "$ARCHIVE_DIR/$(dirname "$relative_path")"
+            mv "$file" "$ARCHIVE_DIR/$relative_path"
+            echo "  已移动到归档目录" | tee -a "$LOG_FILE"
+        fi
+        
+        ((upload_count++))
+    else
+        echo "✗ 上传失败: $relative_path" | tee -a "$LOG_FILE"
+        ((fail_count++))
+    fi
+done
