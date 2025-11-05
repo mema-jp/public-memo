@@ -1,3 +1,7 @@
+env:
+  BINARY_NAME: myapp  # 全局变量
+  APP_PREFIX: mycompany
+
 name: Release
 
 on:
