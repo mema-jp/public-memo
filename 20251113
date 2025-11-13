@@ -1,0 +1,52 @@
+这是 Linux/UNIX 文件系统权限的基础设计原则，属于操作系统的核心概念。我可以给您几个权威的参考来源：
+
+## 官方文档和标准
+
+1. **POSIX 标准**
+
+- IEEE Std 1003.1 (POSIX) 定义了这些权限行为
+- 链接: <https://pubs.opengroup.org/onlinepubs/9699919799/>
+
+1. **Linux man pages** (最权威的本地文档)
+   
+   ```bash
+   # 在您的 Linux 系统上直接查看
+   man 7 inode
+   man 2 unlink
+   man 2 rmdir
+   man 1 chmod
+   ```
+
+- 在线版本: <https://man7.org/linux/man-pages/>
+
+1. **Linux 文件系统文档**
+
+- <https://www.kernel.org/doc/html/latest/filesystems/>
+- <https://www.pathname.com/fhs/> (Filesystem Hierarchy Standard)
+
+## 具体说明删除权限的资源
+
+- **GNU Coreutils 文档** (rm 命令的官方文档)
+  - <https://www.gnu.org/software/coreutils/manual/html_node/rm-invocation.html>
+- **The Linux Documentation Project**
+  - <https://tldp.org/LDP/intro-linux/html/sect_03_04.html>
+
+## 关键说明
+
+在 `man 2 unlink` 中有明确说明：
+
+> “Write permission is required on the directory containing the link to be removed”
+
+在 `man 1 rm` 中也有说明：
+
+> “To remove a file, you need write permission in the directory containing the file”
+
+您可以直接在您的 Linux 系统上运行这些命令查看：
+
+```bash
+man 2 unlink
+man 1 rm
+man 7 inode
+```
+
+这些是最权威的本地文档，解释了为什么目录权限决定了删除文件的能力。​​​​​​​​​​​​​​​​
