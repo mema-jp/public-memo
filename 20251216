@@ -1,6 +1,11 @@
-        # セッションIDをCookieに設定
-        response.set_cookie(key='sessionId', value=session_id)
-        response.headers['Content-Type'] = 'text/html'
-        return Response(content='', status_code=201, media_type='text/html', headers={'Set-Cookie': f'sessionId={session_id}'})
+        # 有効期限を設定（1時間後）
+        expires = datetime.utcnow() + timedelta(hours=1)
+        
+        # 成功時：text/html、複数Set-Cookie
+        response = Response(content='', status_code=201, media_type='text/html')
+        response.set_cookie(key='sessionId', value=session_id, expires=expires, path='/')
+        response.set_cookie(key='xxxx', value='ssssssssssssss', path='/')
+        return response
     
-    return Response(content='', status_code=401, media_type='text/html')
+    # 失敗時：JSON、401
+    return JSONResponse(status_code=401, content={'code': 401, 'message': '認証失敗'})
