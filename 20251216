@@ -1,0 +1,6 @@
+        # セッションIDをCookieに設定
+        response.set_cookie(key='sessionId', value=session_id)
+        response.headers['Content-Type'] = 'text/html'
+        return Response(content='', status_code=201, media_type='text/html', headers={'Set-Cookie': f'sessionId={session_id}'})
+    
+    return Response(content='', status_code=401, media_type='text/html')
